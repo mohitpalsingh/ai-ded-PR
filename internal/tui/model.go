@@ -280,13 +280,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		var cmds []tea.Cmd
-		for _, st := range m.plan.Steps {
-			cmds = append(cmds, m.fetchSummaryCmd(st.Path))
-		}
-		if len(cmds) > 0 {
-			return m, tea.Batch(cmds...)
-		}
+		// Rationale from the plan already provides the guided summary.
+		// Only fetch an on-demand deep summary when requested.
+		m.setDiffContent()
 		return m, nil
 
 	case summaryMsg:
@@ -607,7 +603,8 @@ func (m *tuiModel) fetchSummaryCmd(path string) tea.Cmd {
 		}
 		planner := review.NewPlanner(client, m.embedClient)
 		s := planner.FileSummary(context.Background(), cf)
-		return summaryMsg{path: path, summary: s, fromAI: true}
+		fromAI := client != nil && !strings.HasPrefix(strings.TrimSpace(s), "ERROR ")
+		return summaryMsg{path: path, summary: s, fromAI: fromAI}
 	}
 }
 
@@ -727,7 +724,15 @@ func (m *tuiModel) setDiffContent() {
 	if s, ok := m.summary[path]; ok && s != "" {
 		b.WriteString(s)
 	} else {
-		b.WriteString("(loading...)")
+		// Fall back to the plan rationale so the review is useful immediately.
+		if m.plan != nil && m.current < len(m.plan.Steps) {
+			b.WriteString(m.plan.Steps[m.current].Rationale)
+			if len(m.plan.Steps[m.current].Focus) > 0 {
+				b.WriteString("\nFocus: " + strings.Join(m.plan.Steps[m.current].Focus, "; "))
+			}
+		} else {
+			b.WriteString("(loading...)")
+		}
 	}
 	b.WriteString("\n\n--- diff ---\n")
 	if cf != nil {

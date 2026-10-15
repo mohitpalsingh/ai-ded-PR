@@ -151,7 +151,10 @@ PR Body: %s
 Files (JSON): %s%s
 
 Return ONLY valid JSON with this shape:
-{"summary":"2-3 sentence overview of what the PR does and its risk","steps":[{"order":1,"path":"...","rationale":"a concrete 2-3 sentence explanation of what changed in this file, why it must be reviewed at this point, and what a reviewer should verify","focus":["specific check"],"risk":"low|medium|high","est_minutes":2}]}
+{"summary":"2-3 sentence overview of what the PR does and its risk","steps":[{"order":1,"path":"...","rationale":"- Intent: ...
+- Dependencies/Contracts: ...
+- Verify: ...
+- Risk: ...","focus":["specific check"],"risk":"low|medium|high","est_minutes":2}]}
 Rules:
 - Rationale must reference concrete code changes (added/removed behavior, symbols, paths) and be at least 25 words. No generic placeholders like "why now".
 - Keep semantic clusters together.
@@ -339,7 +342,7 @@ DIFF (truncated):
 %s`, f.Path, patch)
 	out, err := p.Client.Chat(ctx, "You are an expert code reviewer. Output only concise review bullets, no intro/outro.", prompt)
 	if err != nil {
-		return fmt.Sprintf("%s: %s change (+%d/-%d).", f.Path, f.Status, f.Additions, f.Deletions)
+		return fmt.Sprintf("ERROR generating summary: %v", err)
 	}
 	return cleanModelOutput(out)
 }
