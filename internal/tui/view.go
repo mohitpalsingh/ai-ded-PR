@@ -121,7 +121,7 @@ func (m *tuiModel) viewReview() string {
 
 func (m *tuiModel) viewQuery() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Search this PR") + "\n\n")
+	b.WriteString(titleStyle.Render("Ask about this PR") + "\n\n")
 	b.WriteString(m.queryIn.View() + "\n\n")
 	if len(m.queryResults) > 0 {
 		b.WriteString("Relevant files:\n")
@@ -172,7 +172,7 @@ j / k   scroll diff
 m       mark current file done
 s       skip current file
 u       unmark
-/       search changed files by natural language
+/       ask changed files by natural language
 r       regenerate review plan
 g       new PR / source
 ?       toggle help

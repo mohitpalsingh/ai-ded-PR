@@ -90,6 +90,7 @@ type planReadyMsg struct {
 type summaryMsg struct {
 	path    string
 	summary string
+	fromAI  bool
 }
 type searchDoneMsg struct {
 	query   string
@@ -245,6 +246,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.summary = map[string]string{}
 			}
 			for k, v := range m.state.Summaries {
+				if strings.Contains(v, "change (") && !strings.Contains(v, "\n") {
+					continue
+				}
 				m.summary[k] = v
 			}
 		}
@@ -286,7 +290,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case summaryMsg:
-		if v.summary != "" {
+		if v.summary != "" && v.fromAI {
 			m.summary[v.path] = v.summary
 		}
 		if m.stepPath(m.current) == v.path {
@@ -582,7 +586,7 @@ func (m *tuiModel) fetchSummaryCmd(path string) tea.Cmd {
 		return nil
 	}
 	if cached, ok := m.summary[path]; ok && cached != "" {
-		return func() tea.Msg { return summaryMsg{path: path, summary: cached} }
+		return func() tea.Msg { return summaryMsg{path: path, summary: cached, fromAI: true} }
 	}
 	pr := m.pr
 	client := m.client
@@ -598,9 +602,12 @@ func (m *tuiModel) fetchSummaryCmd(path string) tea.Cmd {
 		if cf == nil {
 			return summaryMsg{path: path, summary: ""}
 		}
+		if client == nil {
+			return summaryMsg{path: path, summary: "", fromAI: false}
+		}
 		planner := review.NewPlanner(client, m.embedClient)
 		s := planner.FileSummary(context.Background(), cf)
-		return summaryMsg{path: path, summary: s}
+		return summaryMsg{path: path, summary: s, fromAI: true}
 	}
 }
 
@@ -660,7 +667,7 @@ func (m *tuiModel) saveProgress() {
 	st.Skipped = map[string]bool{}
 	st.Summaries = map[string]string{}
 	for k, v := range m.summary {
-		if strings.TrimSpace(v) != "" {
+		if strings.TrimSpace(v) != "" && strings.Contains(v, "\n") {
 			st.Summaries[k] = v
 		}
 	}
