@@ -178,6 +178,8 @@ func (m *tuiModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
 	if _, err := os.Stat(m.cfg.LLMModel); err == nil {
 		cmds = append(cmds, m.startServerCmd())
+	} else {
+		cmds = append(cmds, m.downloadModelCmd())
 	}
 	if _, err := os.Stat(m.cfg.EmbedModel); err == nil {
 		cmds = append(cmds, m.startEmbedServerCmd())
@@ -238,6 +240,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pr = v.pr
 		m.state = review.LoadState(v.pr)
+		if m.state.Summaries != nil {
+			if m.summary == nil {
+				m.summary = map[string]string{}
+			}
+			for k, v := range m.state.Summaries {
+				m.summary[k] = v
+			}
+		}
 		m.loadingMsg = "planning review order..."
 		m.screen = screenLoading
 		return m, tea.Batch(m.spinner.Tick, m.planCmd())
@@ -258,13 +268,31 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.current = firstPending(m.plan)
 		m.screen = screenReview
 		m.setDiffContent()
-		return m, m.fetchSummaryCmd(m.stepPath(m.current))
+		// load state summaries
+		if m.state != nil && m.state.Summaries != nil {
+			for k, v := range m.state.Summaries {
+				if _, ok := m.summary[k]; !ok {
+					m.summary[k] = v
+				}
+			}
+		}
+		var cmds []tea.Cmd
+		for _, st := range m.plan.Steps {
+			cmds = append(cmds, m.fetchSummaryCmd(st.Path))
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+		return m, nil
 
 	case summaryMsg:
-		m.summary[v.path] = v.summary
+		if v.summary != "" {
+			m.summary[v.path] = v.summary
+		}
 		if m.stepPath(m.current) == v.path {
 			m.setDiffContent()
 		}
+		m.saveProgress()
 		return m, nil
 
 	case searchDoneMsg:
@@ -313,6 +341,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.planner.Client = m.client
 			}
 			m.status = "model ready"
+			// If PR already loaded, upgrade heuristic plan with AI + summaries.
+			if m.pr != nil && m.plan != nil {
+				return m, m.planCmd()
+			}
 		} else {
 			m.status = "model unavailable: " + v.err.Error()
 		}
@@ -549,6 +581,9 @@ func (m *tuiModel) fetchSummaryCmd(path string) tea.Cmd {
 	if path == "" {
 		return nil
 	}
+	if cached, ok := m.summary[path]; ok && cached != "" {
+		return func() tea.Msg { return summaryMsg{path: path, summary: cached} }
+	}
 	pr := m.pr
 	client := m.client
 	return func() tea.Msg {
@@ -623,6 +658,12 @@ func (m *tuiModel) saveProgress() {
 	}
 	st.Done = map[string]bool{}
 	st.Skipped = map[string]bool{}
+	st.Summaries = map[string]string{}
+	for k, v := range m.summary {
+		if strings.TrimSpace(v) != "" {
+			st.Summaries[k] = v
+		}
+	}
 	for _, s := range m.plan.Steps {
 		if s.Status == models.StatusDone {
 			st.Done[s.Path] = true

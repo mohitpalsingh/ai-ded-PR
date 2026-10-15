@@ -1,90 +1,72 @@
-# ai-ded-pr (name TBD)
+# 🧠 ai-ded-pr — Guided AI Code Review in Your Terminal
 
-A local, AI-assisted code review TUI. It loads a GitHub pull request or a local git diff, runs a
-small on-device Gemma model to produce a **guided review plan** (which file to read next and why),
-then walks you through the files and their diffs one by one. Nothing leaves your machine except the
-GitHub API calls needed to fetch a PR.
+**Stop reading PRs file-by-file. Let a local Gemma model build the review path, then walk you through it one file at a time.**
 
-Inspired by DigUp's on-device EmbeddingGemma approach, adapted for *review* rather than search.
+On-device. Fast. No accounts. No uploads.
 
-## Features (v1)
+```text
+  Guided PR Review
+  ┌──────────────────────┬──────────────────────────────────────────┐
+  │ ✓ 1 User.java        │ Rationale: ...                          │
+  │ → 2 OrderService.java│ Intent: ...                             │
+  │ • 3 OrderTest.java   │ Risk: ...  Verify: ...                  │
+  │                      │                                          │
+  │ progress: 1/3        │ ----------- diff -------------           │
+  └──────────────────────┴──────────────────────────────────────────┘
+```
 
-- Hosts: GitHub PRs (public, or private with `GITHUB_TOKEN`) and local git diffs.
-- TUI only: two-pane layout, file/order list on the left, diff + AI summary on the right.
-- Guided order: foundational types -> core logic -> callers/UI -> tests -> config/docs.
-- Per-file AI summary with risk notes and focus checklist.
-- Natural-language search across the changed files (`/`).
-- Progress persistence under `~/.cache/ai-pr-review/state/`.
-- Pluggable host interface so GitLab/Bitbucket can be added later.
-- Local model via `llama.cpp` (`llama-server`), defaulting to Gemma 3 1B Q4 (lightweight).
+## ⚡ Install (one command)
 
-## Install / build
-
-```sh
-# prerequisites
-brew install go llama.cpp
-
+```bash
+git clone https://github.com/<your-org>/ai-ded-pr.git
 cd ai-ded-pr
-go build -o review ./cmd/review
+./scripts/install.sh
 ```
 
-## Usage
-
-GitHub PR:
-
-```sh
-./review --github https://github.com/owner/repo/pull/123
+Or build manually:
+```bash
+make build
+make install
 ```
 
-Local diff:
+## 🚀 Use
 
-```sh
-./review --repo /path/to/repo --base HEAD~1 --head HEAD
-./review diff                       # current repo, working changes (default)
-./review branch-diff feature/x main # compare a branch against a base branch
+```bash
+ai-ded-pr                        # review current repo changes
+ai-ded-pr diff                   # same, explicit
+ai-ded-pr branch-diff feat main  # compare a branch to a base
 ```
 
-Keys:
-
-| Key | Action |
-|---|---|
-| `n` / `p` | next / previous file |
-| `j` / `k` | scroll diff |
-| `m` | mark current file done |
-| `s` | skip current file |
-| `u` | unmark |
-| `/` | search changed files by natural language |
-| `r` | regenerate review plan |
-| `g` | new source |
-| `?` | help |
-| `q` | quit |
-
-### Model
-
-The default model (Qwen2.5-Coder 3B Q4, ~2.1GB) is downloaded on first request (Settings: press `d` in the welcome
-screen) into `~/.cache/ai-pr-review/models/`. Override with `--model /path/to/*.gguf`.
-
-For heavier reasoning you can point `--model` at a larger Gemma GGUF. Without a model the tool still works in
-heuristic mode.
-
-### Private GitHub repos
-
-```sh
-export GITHUB_TOKEN=ghp_...
-./review --github ...
+GitHub PRs:
+```bash
+ai-ded-pr --github https://github.com/owner/repo/pull/123
 ```
 
-## Extending hosts
+### Keys
+`n`/`p` next/prev file · `j`/`k` scroll · `m` done · `s` skip · `/` search · `r` replan · `?` help · `q` quit
 
-Implement `hosts.Host` in `internal/hosts/<name>` and register in the TUI. See `github` and `localgit`.
+## 🧹 Uninstall (zero bloat)
 
-## Layout
-
+```bash
+./scripts/uninstall.sh
 ```
-cmd/review/        entrypoint + flags
-internal/core/     diff parsing, models, planning, state
-internal/hosts/     GitHub + local git adapters
-internal/modelsvc/  llama.cpp server + download + client
-internal/tui/      Bubble Tea interface
-internal/config/   paths + defaults
+Removes the binary, models, cache, state, and logs. Leaves your Homebrew `go`/`llama.cpp` intact.
+
+## 🧩 How it works
+- **GitHub PRs** or **local diffs/branches** → normalized changed files + hunks
+- **Local Gemma 3 (4B, Q4)** on `llama.cpp` (Metal) proposes a review order + rationale + risks
+- **Optional EmbeddingGemma 300M** adds semantic search/clustering to aid (never exposed directly)
+- **Heuristic fallback** if no model is present
+
+## 💾 Footprint
+- LLM: ~2.4 GB (downloaded once)
+- Embeddings (optional): ~0.4 GB
+- Runtime: starts only while the TUI is open, killed on exit
+- Isolated ports/cache; does not touch other local LLM tools
+
+## 🛠 Extend
+Implement `hosts.Host` in `internal/hosts/<name>` for GitLab/Bitbucket/Azure DevOps.
+
+## Status
+v1.0.0 — MIT License
 ```

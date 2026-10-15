@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,7 +22,7 @@ import (
 
 func main() {
 	// Support: `ai-ded-pr diff` and `ai-ded-pr branch-diff <branch> <base>`
-	if len(os.Args) > 1 && (os.Args[1] == "diff" || os.Args[1] == "branch-diff") {
+	if len(os.Args) > 1 && (os.Args[1] == "diff" || os.Args[1] == "branch-diff" || os.Args[1] == "ask") {
 		if os.Args[1] == "branch-diff" {
 			args := []string{os.Args[0]}
 			if len(os.Args) >= 4 {
@@ -31,6 +31,13 @@ func main() {
 				args = append(args, "-base", os.Args[3])
 				args = append(args, "-head", os.Args[2])
 				args = append(args, os.Args[4:]...)
+			}
+			os.Args = args
+		} else if os.Args[1] == "ask" {
+			args := []string{os.Args[0], "-ask"}
+			if len(os.Args) >= 3 {
+				args = append(args, "-q", os.Args[2])
+				args = append(args, os.Args[3:]...)
 			}
 			os.Args = args
 		} else {
@@ -43,6 +50,8 @@ func main() {
 	headFlag := flag.String("head", "HEAD", "Head ref for local diff")
 	modelFlag := flag.String("model", "", "Path to GGUF model")
 	noAIFlag := flag.Bool("no-ai", false, "Disable local AI (heuristic only)")
+	askFlag := flag.Bool("ask", false, "Ask a question over a PR/repo and print relevant files")
+	queryFlag := flag.String("q", "", "Question for --ask")
 	dumpFlag := flag.Bool("dump", false, "Load PR, print review plan, exit")
 	aiDumpFlag := flag.Bool("ai-dump", false, "Use local model in dump (requires --model or default model)")
 	flag.Parse()
@@ -71,6 +80,80 @@ func main() {
 		opts = append(opts, tui.Options{Mode: 1, Source: *repoFlag, Base: *baseFlag, Head: *headFlag, AutoLoad: true})
 	}
 
+	if *askFlag {
+		ctx := context.Background()
+		var pr *models.PullRequest
+		var err error
+		if *githubFlag != "" {
+			ref, e := github.MakeRefFromURL(*githubFlag)
+			if e != nil {
+				fmt.Println(e)
+				os.Exit(1)
+			}
+			pr, err = github.New("").LoadPR(ctx, ref)
+		} else {
+			if *repoFlag == "" {
+				*repoFlag = "."
+			}
+			ad := localgit.New(*repoFlag, *baseFlag, *headFlag)
+			pr, err = ad.Load(ctx)
+		}
+		if err != nil {
+			fmt.Println("load err:", err)
+			os.Exit(1)
+		}
+		var client *modelsvc.Client
+		var embedClient *modelsvc.Client
+		if !*noAIFlag {
+			mp := cfg.LLMModel
+			if *modelFlag != "" {
+				mp = *modelFlag
+			}
+			if _, err := os.Stat(mp); err == nil {
+				srv, err := modelsvc.StartServer(ctx, "llama-server", mp, 18993, 4096, false)
+				if err == nil {
+					client = modelsvc.NewClient(srv.URL)
+					for i := 0; i < 60 && !client.Healthy(ctx); i++ {
+						time.Sleep(500 * time.Millisecond)
+					}
+					defer srv.Stop()
+				}
+			}
+			if _, err := os.Stat(cfg.EmbedModel); err == nil {
+				esrv, err := modelsvc.StartEmbeddingServer(ctx, "llama-server", cfg.EmbedModel, 18994, 2048)
+				if err == nil {
+					embedClient = modelsvc.NewClient(esrv.URL)
+					defer esrv.Stop()
+				}
+			}
+		}
+		q := *queryFlag
+		if q == "" {
+			fmt.Println("usage: ai-ded-pr ask \"question\"")
+			os.Exit(1)
+		}
+		planner := review.NewPlanner(client, embedClient)
+		res := planner.Search(ctx, pr, q)
+		fmt.Printf("Question: %s\n", q)
+		fmt.Printf("Relevant files (%d):\n", len(res))
+		for _, r := range res {
+			fmt.Println("  -", r)
+			if client != nil {
+				var cf *models.ChangedFile
+				for i := range pr.Files {
+					if pr.Files[i].Path == r {
+						cf = &pr.Files[i]
+						break
+					}
+				}
+				if cf != nil {
+					fmt.Println(planner.FileSummary(ctx, cf))
+				}
+			}
+		}
+		return
+	}
+
 	if *dumpFlag {
 		ctx := context.Background()
 		var pr *models.PullRequest
@@ -79,7 +162,7 @@ func main() {
 			ref, e := github.MakeRefFromURL(*githubFlag)
 			if e != nil {
 				fmt.Println(e)
-				return
+				os.Exit(1)
 			}
 			pr, err = github.New("").LoadPR(ctx, ref)
 		} else {
@@ -88,7 +171,7 @@ func main() {
 		}
 		if err != nil {
 			fmt.Println("load err:", err)
-			return
+			os.Exit(1)
 		}
 		fmt.Printf("PR: %s (+%d/-%d) files=%d\n", pr.Title, pr.TotalAdd, pr.TotalDel, len(pr.Files))
 		var client *modelsvc.Client

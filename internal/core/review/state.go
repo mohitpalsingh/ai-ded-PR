@@ -40,9 +40,10 @@ func itoa(n int) string {
 }
 
 type State struct {
-	Done    map[string]bool   `json:"done"`
-	Skipped map[string]bool   `json:"skipped"`
-	Notes   map[string]string `json:"notes"`
+	Done      map[string]bool   `json:"done"`
+	Skipped   map[string]bool   `json:"skipped"`
+	Notes     map[string]string `json:"notes"`
+	Summaries map[string]string `json:"summaries,omitempty"`
 }
 
 func LoadState(pr *models.PullRequest) *State {
@@ -52,6 +53,12 @@ func LoadState(pr *models.PullRequest) *State {
 		return st
 	}
 	json.Unmarshal(b, st)
+	if len(st.Summaries) == 0 && len(st.Notes) > 0 {
+		st.Summaries = map[string]string{}
+		for k, v := range st.Notes {
+			st.Summaries[k] = v
+		}
+	}
 	if st.Done == nil {
 		st.Done = map[string]bool{}
 	}

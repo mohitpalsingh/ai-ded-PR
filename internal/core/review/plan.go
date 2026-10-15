@@ -405,8 +405,25 @@ Return only a JSON array of strings.`, query, string(pb))
 	out = stripCodeFence(out)
 	var res []string
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		// try fallback
-		return nil
+		// try repair truncated
+		if err2 := json.Unmarshal([]byte(strings.TrimSpace(out)+"]"), &res); err2 != nil {
+			// keyword fallback
+			q := strings.ToLower(query)
+			for _, f := range pr.Files {
+				if strings.Contains(strings.ToLower(f.Path), q) || strings.Contains(strings.ToLower(f.Patch), q) {
+					res = append(res, f.Path)
+				}
+			}
+			return res
+		}
+	}
+	if len(res) == 0 {
+		q := strings.ToLower(query)
+		for _, f := range pr.Files {
+			if strings.Contains(strings.ToLower(f.Path), q) || strings.Contains(strings.ToLower(f.Patch), q) {
+				res = append(res, f.Path)
+			}
+		}
 	}
 	return res
 }
