@@ -230,3 +230,178 @@ func TestSalvageHandlesNestedObjects(t *testing.T) {
 		t.Fatalf("want 1 salvaged step for a.go, got %+v", ws)
 	}
 }
+
+// The plan must come out in a linear reading order: if a step depends on
+// another changed file, that file is reviewed first. Bogus, self, duplicate
+// and "./"-prefixed paths in depends_on must be tolerated.
+func TestPlanOrdersDependenciesFirst(t *testing.T) {
+	raw := `{"summary":"s","steps":[
+		{"path":"ui.go","rationale":"- Intent: wires the new service into the UI\n- Dependencies: svc.go\n- Verify: click path\n- Risk: mis-wiring (low)","risk":"low","depends_on":["./svc.go","ghost.go","svc.go"]},
+		{"path":"svc.go","rationale":"- Intent: adds caching to the service\n- Dependencies: store.go\n- Verify: TTL expiry\n- Risk: stale reads (medium)","risk":"medium","depends_on":["store.go"]},
+		{"path":"store.go","rationale":"- Intent: persists entries with a TTL\n- Dependencies: none\n- Verify: eviction\n- Risk: unbounded growth (low)","risk":"low"}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":`+strconv.Quote(raw)+`}}]}`)
+	}))
+	defer srv.Close()
+
+	pr := &models.PullRequest{Title: "t", Files: []models.ChangedFile{
+		{Path: "ui.go", Status: "modified", Additions: 5},
+		{Path: "svc.go", Status: "modified", Additions: 10},
+		{Path: "store.go", Status: "added", Additions: 30},
+	}}
+	plan, err := NewPlanner(modelsvc.NewClient(srv.URL), nil).Plan(context.Background(), pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Steps) != 3 {
+		t.Fatalf("want 3 steps, got %d", len(plan.Steps))
+	}
+	pos := map[string]int{}
+	for i, s := range plan.Steps {
+		pos[s.Path] = i
+		assertCanonical(t, s.Path, s.Rationale)
+		if s.Order != i+1 {
+			t.Fatalf("step %s: order %d, want %d", s.Path, s.Order, i+1)
+		}
+	}
+	// svc depends on store; ui depends on svc -> store < svc < ui
+	if !(pos["store.go"] < pos["svc.go"] && pos["svc.go"] < pos["ui.go"]) {
+		t.Fatalf("dependency order not respected: %v", pos)
+	}
+	// deps canonicalized: "./svc.go" -> "svc.go"; "ghost.go" dropped; no dups
+	ui := plan.Steps[pos["ui.go"]]
+	if len(ui.DependsOn) != 1 || ui.DependsOn[0] != "svc.go" {
+		t.Fatalf("ui depends_on = %v, want [svc.go]", ui.DependsOn)
+	}
+}
+
+// Even when the model emits no depends_on at all, symbol references in the
+// diffs must produce jump edges and force dependencies to be reviewed first.
+func TestPlanInfersDepsFromDiffSymbols(t *testing.T) {
+	const svc = "src/main/java/com/x/ApolloConfigService.java"
+	const test = "src/test/java/com/x/ApolloConfigServiceTest.java"
+	raw := `{"summary":"s","steps":[` +
+		`{"path":"` + test + `","rationale":"- Intent: covers the new lookup path\n- Dependencies: none\n- Verify: run the test\n- Risk: flaky assertion (low)","risk":"low"},` +
+		`{"path":"` + svc + `","rationale":"- Intent: adds a TTL lookup\n- Dependencies: none\n- Verify: TTL expiry\n- Risk: stale reads (medium)","risk":"medium"}` +
+		`]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":`+strconv.Quote(raw)+`}}]}`)
+	}))
+	defer srv.Close()
+
+	pr := &models.PullRequest{Title: "t", Files: []models.ChangedFile{
+		{Path: svc, Status: "modified", Additions: 6, Patch: "@@ -10,3 +10,5 @@\n     private final Map<String, String> cache;\n+    String get(String key) { return cache.get(key); }\n"},
+		{Path: test, Status: "modified", Additions: 4, Patch: "@@ -5,2 +5,4 @@\n+        ApolloConfigService svc = new ApolloConfigService();\n+        assertEquals(\"v\", svc.get(\"k\"));\n"},
+	}}
+	plan, err := NewPlanner(modelsvc.NewClient(srv.URL), nil).Plan(context.Background(), pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pos := map[string]int{}
+	for i, s := range plan.Steps {
+		pos[s.Path] = i
+	}
+	if pos[svc] != 0 || pos[test] != 1 {
+		t.Fatalf("dependency order not enforced by inference: %v", pos)
+	}
+	testStep := plan.Steps[pos[test]]
+	if len(testStep.DependsOn) != 1 || testStep.DependsOn[0] != svc {
+		t.Fatalf("test depends_on = %v, want [%s]", testStep.DependsOn, svc)
+	}
+	// The service is load-bearing for the test: its Dependencies bullet must
+	// say so concretely (reverse-dep annotation replaced the filler).
+	if !strings.Contains(plan.Steps[pos[svc]].Rationale, "ApolloConfigServiceTest.java") {
+		t.Fatalf("reverse-dep note missing: %q", plan.Steps[pos[svc]].Rationale)
+	}
+}
+
+// Model output naming a dependency by fully-qualified class name must map onto
+// the changed file path (and only that file).
+func TestLookupFileAcceptsFQN(t *testing.T) {
+	byPath := map[string]*models.ChangedFile{
+		"ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/impl/ApolloConfigService.java":       {Path: "ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/impl/ApolloConfigService.java"},
+		"ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/handler/CommsCollectionHandler.java": {Path: "ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/handler/CommsCollectionHandler.java"},
+	}
+	for _, q := range []string{
+		"com.hotstar.ap.comms.service.impl.ApolloConfigService",
+		"com.hotstar.ap.comms.service.impl.ApolloConfigService.java",
+		"ApolloConfigService",
+		"impl/ApolloConfigService.java",
+		"./ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/impl/ApolloConfigService.java",
+	} {
+		f := lookupFile(byPath, q)
+		if f == nil || !strings.HasSuffix(f.Path, "ApolloConfigService.java") {
+			t.Fatalf("lookupFile(%q) = %+v, want ApolloConfigService.java", q, f)
+		}
+	}
+	if f := lookupFile(byPath, "com.hotstar.ap.comms.service.impl.GhostService"); f != nil {
+		t.Fatalf("lookupFile(ghost) = %+v, want nil", f)
+	}
+}
+
+// A test that covers a changed class is placed directly after that class —
+// even when the test also depends on other changed files — while unpaired
+// tests keep their position.
+func TestPairTestsWithCode(t *testing.T) {
+	steps := []models.ReviewStep{
+		{Path: "src/main/java/Shared.java"},
+		{Path: "src/main/java/S.java"},
+		{Path: "src/main/java/Other.java"},
+		{Path: "src/test/java/STest.java", DependsOn: []string{"src/main/java/Shared.java", "src/main/java/S.java"}},
+		{Path: "src/test/java/UnpairedTest.java", DependsOn: []string{"src/main/java/Ghost.java"}},
+		{Path: "docs/readme.md"},
+	}
+	out := pairTestsWithCode(steps)
+	var got []string
+	for _, s := range out {
+		got = append(got, s.Path)
+	}
+	want := "src/main/java/Shared.java,src/main/java/S.java,src/test/java/STest.java,src/main/java/Other.java,src/test/java/UnpairedTest.java,docs/readme.md"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("order = %s, want %s", strings.Join(got, ","), want)
+	}
+}
+
+// depends_on may arrive as a comma string or as objects; both parse.
+func TestFlexPathsTolerance(t *testing.T) {
+	raw := `{"steps":[{"path":"a.go","rationale":"- Intent: x - Dependencies: y - Verify: z - Risk: w","depends_on":"b.go, ./c.go"},{"path":"b.go","rationale":"- Intent: x - Dependencies: y - Verify: z - Risk: w","depends_on":[{"path":"a.go"}]}]}`
+	wp, err := parsePlan(raw)
+	if err != nil {
+		t.Fatalf("parsePlan: %v", err)
+	}
+	if len(wp.Steps) != 2 {
+		t.Fatalf("want 2 steps, got %d", len(wp.Steps))
+	}
+	var got []string
+	for _, s := range wp.Steps {
+		if s.Path == "a.go" {
+			got = s.DependsOn
+		}
+	}
+	if len(got) != 2 || got[0] != "b.go" || got[1] != "./c.go" {
+		t.Fatalf("string depends_on parsed as %v", got)
+	}
+}
+
+// orderSteps must never drop or duplicate steps, even with cycles.
+func TestOrderStepsCycleKeepsEverything(t *testing.T) {
+	steps := []models.ReviewStep{
+		{Path: "a.go", DependsOn: []string{"b.go"}},
+		{Path: "b.go", DependsOn: []string{"a.go"}},
+		{Path: "c.go"},
+	}
+	out := orderSteps(steps)
+	if len(out) != 3 {
+		t.Fatalf("want 3 steps, got %d", len(out))
+	}
+	seen := map[string]bool{}
+	for _, s := range out {
+		if seen[s.Path] {
+			t.Fatalf("duplicate step %s", s.Path)
+		}
+		seen[s.Path] = true
+	}
+}

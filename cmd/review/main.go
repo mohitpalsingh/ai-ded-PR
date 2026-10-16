@@ -234,6 +234,9 @@ func main() {
 			if len(s.Focus) > 0 {
 				fmt.Printf("     focus: %s\n", strings.Join(s.Focus, "; "))
 			}
+			if len(s.DependsOn) > 0 {
+				fmt.Printf("     deps: %s\n", strings.Join(s.DependsOn, "; "))
+			}
 		}
 		fmt.Println("Summary:", plan.Summary)
 		return

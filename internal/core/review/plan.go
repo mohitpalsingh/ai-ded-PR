@@ -79,6 +79,15 @@ func heuristicPlan(pr *models.PullRequest) *models.ReviewPlan {
 		})
 	}
 	summary := fmt.Sprintf("PR touches %d files (+%d/-%d). Suggested order groups foundational types first, then logic, then callers, tests and config.", len(pr.Files), pr.TotalAdd, pr.TotalDel)
+	// Same dependency treatment as the model path: inferred edges, linear
+	// order, and concrete reverse-dependency notes — all offline.
+	inferDeps(steps, pr)
+	steps = orderSteps(steps)
+	steps = pairTestsWithCode(steps)
+	annotateReverseDeps(steps)
+	for i := range steps {
+		steps[i].Order = i + 1
+	}
 	return &models.ReviewPlan{Summary: summary, Steps: steps}
 }
 
@@ -204,6 +213,138 @@ func defaultRisk(f *models.ChangedFile) string {
 	}
 }
 
+// pairTestsWithCode moves a test step that depends on exactly one changed file
+// directly after that file (stem + Test/IT/Spec/_test), so the reviewer checks
+// the implementation and its test back to back. Tests that cannot be paired
+// keep their position — no gratuitous reordering.
+func pairTestsWithCode(steps []models.ReviewStep) []models.ReviewStep {
+	if len(steps) < 2 {
+		return steps
+	}
+	out := make([]models.ReviewStep, len(steps))
+	copy(out, steps)
+	for i := 0; i < len(out); i++ {
+		t := out[i]
+		// The primary dependency is the one the test covers by name; other
+		// edges (e.g. a shared service) don't block pairing.
+		dep := ""
+		for _, d := range t.DependsOn {
+			if coversTest(t.Path, d) {
+				dep = d
+				break
+			}
+		}
+		if dep == "" {
+			continue
+		}
+		di := -1
+		for j := range out {
+			if out[j].Path == dep {
+				di = j
+				break
+			}
+		}
+		if di < 0 || di > i {
+			continue
+		}
+		at := di + 1
+		for at < i && coversTest(out[at].Path, dep) {
+			at++
+		}
+		if at == i {
+			continue // already directly after the file it covers
+		}
+		moved := out[i]
+		copy(out[at+1:i+1], out[at:i])
+		out[at] = moved
+	}
+	return out
+}
+
+// isTestFile reports whether a code file looks like a test module.
+func isTestFile(p string) bool {
+	stem, ok := codeStem(p)
+	if !ok {
+		return false
+	}
+	switch {
+	case strings.HasSuffix(stem, "Test"), strings.HasSuffix(stem, "Tests"),
+		strings.HasSuffix(stem, "IT"), strings.HasSuffix(stem, "Spec"),
+		strings.HasSuffix(stem, "_test"), strings.HasSuffix(stem, "_spec"),
+		strings.HasPrefix(stem, "test_"):
+		return true
+	}
+	return false
+}
+
+// coversTest reports whether testPath is a test file for the code file depPath
+// (e.g. ".../ApolloConfigServiceTest.java" covers ".../ApolloConfigService.java").
+func coversTest(testPath, depPath string) bool {
+	if !isTestFile(testPath) {
+		return false
+	}
+	ts, ok1 := codeStem(testPath)
+	ds, ok2 := codeStem(depPath)
+	if !ok1 || !ok2 {
+		return false
+	}
+	for _, suf := range []string{"Test", "Tests", "IT", "Spec"} {
+		if ts == ds+suf {
+			return true
+		}
+	}
+	return ts == ds+"_test" || ts == ds+"_spec" || ts == "test_"+ds
+}
+
+// annotateReverseDeps upgrades generic "Dependencies" filler with concrete
+// information now that dependency edges are known: which changed files rely on
+// this one. The reviewer learns whether a file is load-bearing before reading it.
+func annotateReverseDeps(steps []models.ReviewStep) {
+	rev := map[string][]string{}
+	for _, s := range steps {
+		for _, d := range s.DependsOn {
+			rev[d] = append(rev[d], s.Path)
+		}
+	}
+	for i := range steps {
+		names := rev[steps[i].Path]
+		if len(names) == 0 {
+			continue
+		}
+		// name up to three dependents; the rest becomes a count
+		var short []string
+		for _, n := range names {
+			if len(short) == 3 {
+				break
+			}
+			short = append(short, baseName(n))
+		}
+		txt := strings.Join(short, ", ")
+		if len(names) > len(short) {
+			txt += fmt.Sprintf(" (+%d more)", len(names)-len(short))
+		}
+		replacement := fmt.Sprintf("changed file(s) depending on this one: %s", txt)
+		lines := strings.Split(steps[i].Rationale, "\n")
+		for j, ln := range lines {
+			if !strings.HasPrefix(ln, "- Dependencies: ") {
+				continue
+			}
+			if strings.Contains(ln, "check callers, tests and configuration") {
+				lines[j] = "- Dependencies: " + replacement
+			}
+			break
+		}
+		steps[i].Rationale = strings.Join(lines, "\n")
+	}
+}
+
+func baseName(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
 func buildRationale(p rationaleParts, f *models.ChangedFile) string {
 	if p.intent == "" {
 		p.intent = defaultIntent(f)
@@ -255,6 +396,7 @@ func (p *Planner) Plan(ctx context.Context, pr *models.PullRequest) (*models.Rev
 		Status string   `json:"status"`
 		Add    int      `json:"add"`
 		Del    int      `json:"del"`
+		Diff   string   `json:"diff,omitempty"`
 		Hunks  []string `json:"hunks,omitempty"`
 	}
 	var files []fsummary
@@ -269,6 +411,18 @@ func (p *Planner) Plan(ctx context.Context, pr *models.PullRequest) (*models.Rev
 			}
 		}
 		files = append(files, fsummary{Path: f.Path, Status: f.Status, Add: f.Additions, Del: f.Deletions, Hunks: hs})
+	}
+	// Give the model the actual changed lines (bounded): rationales built from
+	// file names alone are speculation, which is useless to a reviewer. The
+	// per-file digest budget degrades gracefully; the file list stays complete.
+	diffBudget := 8000
+	for i := range pr.Files {
+		d := diffDigest(pr.Files[i].Patch, 800)
+		if d == "" || len(d) > diffBudget {
+			continue
+		}
+		diffBudget -= len(d)
+		files[i].Diff = d
 	}
 	p.ensureFileEmbeddings(ctx, pr)
 	clusters := semanticClusters(pr, p.fileEmbed)
@@ -287,21 +441,27 @@ func (p *Planner) Plan(ctx context.Context, pr *models.PullRequest) (*models.Rev
 		cb, _ := json.Marshal(clusters)
 		clusterText = "\nSemantic clusters (files likely related and best reviewed together): " + string(cb)
 	}
-	prompt := fmt.Sprintf(`You are an expert code reviewer. Given a PR, produce a guided review plan.
+	prompt := fmt.Sprintf(`You are an expert code reviewer. Produce a guided review plan that minimizes the reviewer's time.
 
 PR Title: %s
 PR Body: %s
 Files (JSON): %s%s
 
 Return ONLY valid JSON with this shape:
-{"summary":"2-3 sentence overview of what the PR does and its risk","steps":[{"order":1,"path":"...","rationale":"- Intent: ...\n- Dependencies: ...\n- Verify: ...\n- Risk: ...","focus":["specific check"],"risk":"low|medium|high","est_minutes":2}]}
-Rules:
-- Rationale must be exactly four bullet lines, in this order and with these exact prefixes: "- Intent: ", "- Dependencies: ", "- Verify: ", "- Risk: ".
-- Rationale must reference concrete code changes (added/removed behavior, symbols, paths). Keep every bullet under 20 words. No generic placeholders like "why now".
-- Keep semantic clusters together.
-- Order files to minimize cognitive load: foundational types/models -> core logic -> callers/API/UI -> tests -> config/docs.
-- Path must be one of the changed files.
-- Include exactly one step for every file listed above; never omit a file.`, pr.Title, truncate(pr.Body, 1500), string(fb), clusterText)
+{"summary":"2-3 sentence overview: what the PR does and where the risk concentrates","steps":[{"order":1,"path":"...","rationale":"- Intent: ...\n- Dependencies: ...\n- Verify: ...\n- Risk: ...","focus":["specific check"],"risk":"low|medium|high","depends_on":["exact-path-of-another-changed-file"],"est_minutes":2}]}
+
+Rationale rules — exactly four bullet lines, these exact prefixes, each under 18 words. Base every bullet on the diff lines provided (each file has "diff": changed lines, + added, - removed); never speculate:
+- "- Intent: " the behavior delta: what the code does after this change that it did not do before. Name concrete symbols/values from the diff. Never start with "Modifies"/"Updates"/"Adds" + the file name; never restate the path; never say "likely"/"possibly"/"probably".
+- "- Dependencies: " first the exact changed paths this file imports or calls (as seen in the diff), then external contracts/services it touches.
+- "- Verify: " one or two concrete checks: a specific edge case, input, symbol, or call site to inspect. Never generic advice like "check correctness".
+- "- Risk: " the most plausible failure mode and its severity (low/medium/high).
+
+Ordering rules:
+- Steps must be in the exact linear order a senior reviewer should read them: shared types/interfaces/config consumed by others first, then core logic in call order (callee before caller), then entrypoints/APIs, then tests, then docs/resources.
+- If this file imports, calls, or relies on behavior in another changed file, list that exact path in depends_on and make sure it appears earlier in the steps.
+- Keep tightly related files adjacent (a test right after the code it tests); do not interleave unrelated groups.
+- Include exactly one step for every file listed above: the list has %d files, so output exactly %d steps; never omit, merge or repeat a file (each path appears exactly once).
+- depends_on lists only exact paths from the file list above; empty array otherwise.`, pr.Title, truncate(pr.Body, 1500), string(fb), clusterText, len(pr.Files), len(pr.Files))
 	if os.Getenv("AI_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "PLAN prompt=%d bytes files=%d\n", len(prompt), len(files))
 	}
@@ -339,17 +499,21 @@ Rules:
 		var missing []fsummary
 		for _, f := range pr.Files {
 			if !seen[f.Path] {
-				missing = append(missing, fsummary{Path: f.Path, Status: f.Status, Add: f.Additions, Del: f.Deletions})
+				missing = append(missing, fsummary{Path: f.Path, Status: f.Status, Add: f.Additions, Del: f.Deletions, Diff: diffDigest(f.Patch, 600)})
 			}
+		}
+		if os.Getenv("AI_DEBUG") != "" {
+			fmt.Fprintf(os.Stderr, "FOLLOW-UP for %d file(s)\n", len(missing))
 		}
 		mb, _ := json.Marshal(missing)
 		followUp := fmt.Sprintf(`You are an expert code reviewer producing a guided review plan.
-Return ONLY valid JSON: {"steps":[{"path":"...","rationale":"- Intent: ...\n- Dependencies: ...\n- Verify: ...\n- Risk: ...","focus":["specific check"],"risk":"low|medium|high"}]}
+Return ONLY valid JSON: {"steps":[{"path":"...","rationale":"- Intent: ...\n- Dependencies: ...\n- Verify: ...\n- Risk: ...","focus":["specific check"],"risk":"low|medium|high","depends_on":["exact-path-of-another-changed-file"]}]}
 Rules:
-- Include exactly one step for every file below.
-- rationale must be exactly four bullet lines with prefixes "- Intent: ", "- Dependencies: ", "- Verify: ", "- Risk: ", each under 20 words.
+- Include exactly one step for every file below: %d file(s) means %d steps total.
+- rationale must be exactly four bullet lines with prefixes "- Intent: ", "- Dependencies: ", "- Verify: ", "- Risk: ", each under 18 words; Intent states the behavior delta, never restates the path.
+- depends_on lists only exact paths from the list below (empty array otherwise).
 - Output MUST start with { and end with }: no prose, no markdown, no code fences.
-Files (JSON): %s`, string(mb))
+Files (JSON): %s`, len(missing), len(missing), string(mb))
 		if out2, err2 := p.Client.Chat(ctx, "You only output valid JSON, no markdown.", followUp); err2 == nil {
 			if wp2, err3 := parsePlan(out2); err3 == nil {
 				steps = append(steps, wireToSteps(wp2.Steps, byPath, seen)...)
@@ -368,18 +532,111 @@ Files (JSON): %s`, string(mb))
 			steps[i].Rationale = FormatRationale(steps[i].Rationale, f)
 		}
 	}
+	// Make the order linear to read: dependencies first, model order otherwise.
+	inferDeps(steps, pr) // deterministic symbol-based edges on top of the model's
+	steps = orderSteps(steps)
+	steps = pairTestsWithCode(steps)
+	annotateReverseDeps(steps)
 	for i := range steps {
 		steps[i].Order = i + 1
 	}
 	if strings.TrimSpace(string(wp.Summary)) == "" {
 		wp.Summary = flexString(heuristicPlan(pr).Summary)
 	}
-	steps = reorderStepsByCluster(steps, clusters)
 	plan := models.ReviewPlan{Summary: string(wp.Summary), Steps: steps}
 	if len(plan.Steps) == 0 {
 		return heuristicPlan(pr), nil
 	}
 	return &plan, nil
+}
+
+// diffDigest condenses a patch to the changed lines only (+/-), keeping hunk
+// headers for orientation and skipping context lines, capped near maxChars so
+// the model sees what actually changed without blowing the prompt budget.
+func diffDigest(patch string, maxChars int) string {
+	if strings.TrimSpace(patch) == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, ln := range strings.Split(patch, "\n") {
+		var keep string
+		switch {
+		case strings.HasPrefix(ln, "@@"):
+			keep = ln
+		case strings.HasPrefix(ln, "+++"), strings.HasPrefix(ln, "---"), strings.HasPrefix(ln, "diff "), strings.HasPrefix(ln, "index "):
+			continue
+		case strings.HasPrefix(ln, "+"), strings.HasPrefix(ln, "-"):
+			keep = ln
+		default:
+			continue
+		}
+		if b.Len()+len(keep)+1 > maxChars {
+			b.WriteString("\n...(truncated)")
+			break
+		}
+		b.WriteString(keep)
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// orderSteps makes the reading order consistent: when a step depends on
+// another changed file, that file comes first. Stable otherwise — the model's
+// order is preserved except where a dependency forces a move (cycles keep
+// their original relative order).
+func orderSteps(steps []models.ReviewStep) []models.ReviewStep {
+	if len(steps) < 2 {
+		return steps
+	}
+	idx := map[string]int{}
+	for i, s := range steps {
+		idx[s.Path] = i
+	}
+	indeg := make([]int, len(steps))
+	dependents := make([][]int, len(steps))
+	for i, s := range steps {
+		for _, d := range s.DependsOn {
+			j, ok := idx[d]
+			if !ok || j == i {
+				continue
+			}
+			indeg[i]++
+			dependents[j] = append(dependents[j], i)
+		}
+	}
+	var ready []int
+	for i := range steps {
+		if indeg[i] == 0 {
+			ready = append(ready, i)
+		}
+	}
+	out := make([]models.ReviewStep, 0, len(steps))
+	done := make([]bool, len(steps))
+	for len(ready) > 0 {
+		// always take the lowest original index → stable result
+		k := 0
+		for x := 1; x < len(ready); x++ {
+			if ready[x] < ready[k] {
+				k = x
+			}
+		}
+		i := ready[k]
+		ready = append(ready[:k], ready[k+1:]...)
+		done[i] = true
+		out = append(out, steps[i])
+		for _, j := range dependents[i] {
+			indeg[j]--
+			if indeg[j] == 0 {
+				ready = append(ready, j)
+			}
+		}
+	}
+	for i := range steps {
+		if !done[i] {
+			out = append(out, steps[i])
+		}
+	}
+	return out
 }
 
 // planWire mirrors the review-plan JSON while tolerating alternate field names
@@ -401,7 +658,47 @@ type stepWire struct {
 	Verify     flexString    `json:"verify"`
 	RiskText   flexString    `json:"risk"`
 	Focus      []string      `json:"focus"`
+	DependsOn  flexPaths     `json:"depends_on"`
 	EstMinutes int           `json:"est_minutes"`
+}
+
+// flexPaths accepts a JSON array of strings (preferred), a single string
+// ("a.go, b.go"), or an array of objects with a "path" key.
+type flexPaths []string
+
+func (fp *flexPaths) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	var raw []json.RawMessage
+	if b[0] == '[' {
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return err
+		}
+	} else {
+		raw = []json.RawMessage{b}
+	}
+	var out []string
+	for _, r := range raw {
+		var s string
+		if json.Unmarshal(r, &s) == nil {
+			for _, part := range strings.Split(s, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					out = append(out, part)
+				}
+			}
+			continue
+		}
+		var obj struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(r, &obj) == nil && obj.Path != "" {
+			out = append(out, obj.Path)
+		}
+	}
+	*fp = out
+	return nil
 }
 
 // flexRationale accepts the rationale as a string, an array of strings, or an
@@ -630,7 +927,148 @@ func lookupFile(byPath map[string]*models.ChangedFile, p string) *models.Changed
 			found = f
 		}
 	}
-	return found
+	if found != nil {
+		return found
+	}
+	// Models often name dependencies by class or FQN instead of path:
+	// "com.a.b.ApolloConfigService", "com.a.b.ApolloConfigService.java" or
+	// bare "ApolloConfigService". Match these against extension-stripped
+	// path suffixes.
+	if !strings.Contains(q, "/") {
+		cand := q
+		if strings.Contains(cand, ".") {
+			// drop a trailing code extension if present ("...C.java")
+			if i := strings.LastIndexByte(cand, '.'); i > 0 && knownCodeExt(cand[i+1:]) {
+				cand = cand[:i]
+			}
+			cand = strings.ReplaceAll(cand, ".", "/")
+		}
+		var found *models.ChangedFile
+		for path, f := range byPath {
+			stem := path
+			if i := strings.LastIndexByte(stem, '.'); i > strings.LastIndexByte(stem, '/') {
+				stem = stem[:i]
+			}
+			if stem == cand || strings.HasSuffix(stem, "/"+cand) {
+				if found != nil {
+					return nil // ambiguous
+				}
+				found = f
+			}
+		}
+		return found
+	}
+	return nil
+}
+
+// knownCodeExt reports whether ext is a source-file extension whose basename
+// (minus extension) is a plausible symbol name the model may cite.
+func knownCodeExt(ext string) bool {
+	switch ext {
+	case "java", "go", "kt", "kts", "ts", "tsx", "js", "jsx", "py", "rb",
+		"rs", "cs", "swift", "c", "cc", "cpp", "h", "hpp", "scala", "m", "mm":
+		return true
+	}
+	return false
+}
+
+// codeStem returns the symbol name a code filename stands for (e.g.
+// "ApolloConfigService" for ".../ApolloConfigService.java").
+func codeStem(p string) (string, bool) {
+	base := p
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		base = base[i+1:]
+	}
+	if i := strings.LastIndexByte(base, '.'); i > 0 && knownCodeExt(base[i+1:]) {
+		return base[:i], true
+	}
+	return "", false
+}
+
+// inferDeps adds dependency edges that are certain from the diffs themselves:
+// when a file's patch mentions another changed code file's symbol, that edge is
+// real regardless of what the model said (or forgot). Tests point at the class
+// under test, callers at the service they call — exactly the jumps a reviewer
+// needs, at zero model cost.
+func inferDeps(steps []models.ReviewStep, pr *models.PullRequest) {
+	if pr == nil || len(steps) < 2 {
+		return
+	}
+	patch := make(map[string]string, len(pr.Files))
+	for _, f := range pr.Files {
+		patch[f.Path] = f.Patch
+	}
+	type cand struct{ path, stem string }
+	var cands []cand
+	for _, s := range steps {
+		if stem, ok := codeStem(s.Path); ok && len(stem) >= 4 {
+			cands = append(cands, cand{s.Path, stem})
+		}
+	}
+	for i := range steps {
+		text := patch[steps[i].Path]
+		if text == "" {
+			continue
+		}
+		content := diffContentLines(text)
+		have := make(map[string]bool, len(steps[i].DependsOn))
+		for _, d := range steps[i].DependsOn {
+			have[d] = true
+		}
+		for _, c := range cands {
+			if c.path == steps[i].Path || have[c.path] {
+				continue
+			}
+			if containsWord(content, c.stem) {
+				steps[i].DependsOn = append(steps[i].DependsOn, c.path)
+				have[c.path] = true
+			}
+		}
+	}
+}
+
+// diffContentLines joins a patch's lines, dropping file headers so a file's own
+// name in "+++ b/..." cannot be mistaken for a symbol reference.
+func diffContentLines(patch string) string {
+	var b strings.Builder
+	for _, ln := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(ln, "diff ") || strings.HasPrefix(ln, "index ") ||
+			strings.HasPrefix(ln, "+++ ") || strings.HasPrefix(ln, "--- ") ||
+			strings.HasPrefix(ln, "+++b/") {
+			continue
+		}
+		b.WriteString(ln)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// containsWord reports whether text contains word delimited by non-identifier
+// bytes, so "ApolloConfigService" does not match inside
+// "ApolloConfigServiceHelper".
+func containsWord(text, word string) bool {
+	if word == "" {
+		return false
+	}
+	for i := 0; i+len(word) <= len(text); {
+		j := strings.Index(text[i:], word)
+		if j < 0 {
+			return false
+		}
+		j += i
+		before := j == 0 || !isIdentByte(text[j-1])
+		afterIdx := j + len(word)
+		after := afterIdx >= len(text) || !isIdentByte(text[afterIdx])
+		if before && after {
+			return true
+		}
+		i = j + len(word)
+	}
+	return false
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
 // wireToSteps maps parsed model steps onto known changed files, tolerating
@@ -676,11 +1114,24 @@ func wireToSteps(ws []stepWire, byPath map[string]*models.ChangedFile, seen map[
 		if isNoise(parts.risk) {
 			parts.risk = ""
 		}
+		// canonicalize changed-file dependencies: exact known paths only,
+		// de-duplicated, never self-referencing
+		var depends []string
+		depSeen := map[string]bool{}
+		for _, d := range w.DependsOn {
+			df := lookupFile(byPath, d)
+			if df == nil || df.Path == f.Path || depSeen[df.Path] {
+				continue
+			}
+			depSeen[df.Path] = true
+			depends = append(depends, df.Path)
+		}
 		steps = append(steps, models.ReviewStep{
 			Path:       f.Path,
 			Rationale:  buildRationale(parts, f),
 			Focus:      compactFocus(w.Focus),
 			Risk:       level,
+			DependsOn:  depends,
 			EstMinutes: w.EstMinutes,
 			Status:     models.StatusPending,
 		})

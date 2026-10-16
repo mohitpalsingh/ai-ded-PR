@@ -91,6 +91,8 @@ if [ "$USE_DEFAULT" = "1" ]; then
 else
   [ "$AI_AUTHORED" -ge 1 ] && ok "AI-authored rationales ($AI_AUTHORED)" || bad "no AI-authored rationales"
 fi
+DEPS_FILES="$(grep -c -- 'deps:' /tmp/regr-ai.txt || true)"
+[ "$DEPS_FILES" -ge 1 ] && ok "dependency jump links ($DEPS_FILES files)" || bad "no dependency links in AI plan"
 
 echo "== 4. TUI with default model =="
 pkill -f "llama-server" 2>/dev/null; sleep 1
@@ -99,6 +101,8 @@ strip_ansi /tmp/regr-tui.txt > /tmp/regr-tui.clean.txt
 has /tmp/regr-tui.clean.txt "model ready" && ok "model ready shown" || bad "model ready not shown"
 has /tmp/regr-tui.clean.txt "/ ask" && ok "ask footer (not search)" || bad "ask footer missing"
 has /tmp/regr-tui.clean.txt "ask changed files" && ok "ask help text" || bad "ask help text missing"
+has /tmp/regr-tui.clean.txt "jump to a changed dependency" && ok "dep jump help" || bad "dep jump help missing"
+has /tmp/regr-tui.clean.txt "return after a dependency jump" && ok "dep back help" || bad "dep back help missing"
 check "no loading stalls"     "0" "$(grep -c '(loading...)' /tmp/regr-tui.clean.txt || true)"
 has /tmp/regr-tui.clean.txt "progress: 0/$FILES" && ok "progress line" || bad "progress line missing"
 

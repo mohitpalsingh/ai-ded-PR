@@ -59,9 +59,10 @@ type tuiModel struct {
 	state   *review.State
 	planner *review.Planner
 
-	current int
-	listOff int
-	summary map[string]string
+	current  int
+	listOff  int
+	depStack []int
+	summary  map[string]string
 
 	loadingMsg string
 	status     string
@@ -241,6 +242,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pr = v.pr
 		m.state = review.LoadState(v.pr)
+		m.depStack = nil
 		if m.state.Summaries != nil {
 			if m.summary == nil {
 				m.summary = map[string]string{}
@@ -271,6 +273,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if v.plan != nil {
 			m.plan = v.plan
+			m.depStack = nil
 			review.ApplyState(m.plan, m.state)
 		}
 		if m.plan == nil && m.pr != nil {
@@ -483,6 +486,10 @@ func (m *tuiModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.saveProgress()
 				m.setDiffContent()
 			}
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			m.jumpToDep(int(key[0] - '1'))
+		case "b", "backspace":
+			m.jumpBack()
 		case "/":
 			m.screen = screenQuery
 			m.queryIn.SetValue("")
@@ -703,6 +710,16 @@ func (m *tuiModel) setDiffContent() {
 	if len(m.plan.Steps[m.current].Focus) > 0 {
 		fmt.Fprintf(&b, "Focus: %s\n", strings.Join(m.plan.Steps[m.current].Focus, "; "))
 	}
+	if deps := m.plan.Steps[m.current].DependsOn; len(deps) > 0 {
+		var parts []string
+		for i, d := range deps {
+			if i >= 9 {
+				break
+			}
+			parts = append(parts, fmt.Sprintf("[%d] %s", i+1, d))
+		}
+		fmt.Fprintf(&b, "Deps: %s  (1-%d jump · b return)\n", strings.Join(parts, "  "), len(parts))
+	}
 	b.WriteString("\n--- diff ---\n")
 	if cf != nil {
 		b.WriteString(colorizeDiff(capDiff(cf.Patch)))
@@ -716,6 +733,55 @@ func (m *tuiModel) setDiffContent() {
 // maxDiffLines bounds how much of a very large patch we render, keeping the
 // viewport fast and memory flat on huge PRs.
 const maxDiffLines = 1500
+
+// jumpToDep moves to the n-th changed dependency of the current file
+// (0-based). The previous position is remembered so `b` can return after
+// verifying the dependency — no extra model calls, no state rewrites.
+func (m *tuiModel) jumpToDep(n int) {
+	if m.plan == nil || m.current >= len(m.plan.Steps) {
+		return
+	}
+	deps := m.plan.Steps[m.current].DependsOn
+	if len(deps) == 0 {
+		m.status = "this file has no changed dependencies to jump to"
+		return
+	}
+	if n >= len(deps) {
+		return
+	}
+	target := -1
+	for i := range m.plan.Steps {
+		if m.plan.Steps[i].Path == deps[n] {
+			target = i
+			break
+		}
+	}
+	if target < 0 || target == m.current {
+		return
+	}
+	m.depStack = append(m.depStack, m.current)
+	if len(m.depStack) > 20 {
+		m.depStack = m.depStack[len(m.depStack)-20:]
+	}
+	m.current = target
+	m.status = fmt.Sprintf("→ dependency %d: %s  (b to return)", n+1, deps[n])
+	m.setDiffContent()
+}
+
+// jumpBack returns to the file a dependency jump came from.
+func (m *tuiModel) jumpBack() {
+	if m.plan == nil || len(m.depStack) == 0 {
+		m.status = "nothing to return to (1-9 jumps to a changed dependency)"
+		return
+	}
+	m.current = m.depStack[len(m.depStack)-1]
+	m.depStack = m.depStack[:len(m.depStack)-1]
+	if m.current >= len(m.plan.Steps) {
+		m.current = 0
+	}
+	m.status = "← back to " + m.plan.Steps[m.current].Path
+	m.setDiffContent()
+}
 
 func capDiff(patch string) string {
 	total := strings.Count(patch, "\n")

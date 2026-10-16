@@ -70,6 +70,7 @@ type ReviewStep struct {
 	Rationale  string       `json:"rationale"`
 	Focus      []string     `json:"focus,omitempty"`
 	Risk       string       `json:"risk,omitempty"`
+	DependsOn  []string     `json:"depends_on,omitempty"`
 	EstMinutes int          `json:"est_minutes,omitempty"`
 	Status     ReviewStatus `json:"status"`
 }

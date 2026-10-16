@@ -175,6 +175,8 @@ j / k   scroll diff
 m       mark current file done
 s       skip current file
 u       unmark
+1-9     jump to a changed dependency of this file
+b       return after a dependency jump
 /       ask changed files by natural language
 r       regenerate review plan
 g       new PR / source
