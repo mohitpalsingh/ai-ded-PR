@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -34,6 +35,8 @@ type tuiModel struct {
 	cfg    config.Config
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	shutdownOnce sync.Once
 
 	noAI        bool
 	client      *modelsvc.Client
@@ -66,6 +69,8 @@ type tuiModel struct {
 	queryResults []string
 	queryIdx     int
 
+	version string
+
 	width  int
 	height int
 	help   bool
@@ -75,8 +80,6 @@ type tuiModel struct {
 	dlTotal     int64
 	program     *tea.Program
 	autoLoad    bool
-
-	// summary channel tracking not needed
 }
 
 type prLoadedMsg struct {
@@ -84,13 +87,9 @@ type prLoadedMsg struct {
 	err error
 }
 type planReadyMsg struct {
-	plan *models.ReviewPlan
-	err  error
-}
-type summaryMsg struct {
-	path    string
-	summary string
-	fromAI  bool
+	plan   *models.ReviewPlan
+	err    error
+	fromAI bool
 }
 type searchDoneMsg struct {
 	query   string
@@ -125,6 +124,7 @@ type Options struct {
 	Base     string
 	Head     string
 	AutoLoad bool
+	Version  string
 }
 
 func New(cfg config.Config, noAI bool, opts ...Options) *tuiModel {
@@ -155,6 +155,7 @@ func New(cfg config.Config, noAI bool, opts ...Options) *tuiModel {
 	m.viewport = viewport.New(80, 20)
 	if len(opts) > 0 {
 		o := opts[0]
+		m.version = o.Version
 		m.sourceMode = o.Mode
 		if o.Source != "" {
 			m.sourceIn.SetValue(o.Source)
@@ -173,17 +174,16 @@ func New(cfg config.Config, noAI bool, opts ...Options) *tuiModel {
 }
 
 func (m *tuiModel) Init() tea.Cmd {
-	if m.noAI {
-		return nil
-	}
 	var cmds []tea.Cmd
-	if _, err := os.Stat(m.cfg.LLMModel); err == nil {
-		cmds = append(cmds, m.startServerCmd())
-	} else {
-		cmds = append(cmds, m.downloadModelCmd())
-	}
-	if _, err := os.Stat(m.cfg.EmbedModel); err == nil {
-		cmds = append(cmds, m.startEmbedServerCmd())
+	if !m.noAI {
+		if _, err := os.Stat(m.cfg.LLMModel); err == nil {
+			cmds = append(cmds, m.startServerCmd())
+		} else {
+			cmds = append(cmds, m.downloadModelCmd())
+		}
+		if _, err := os.Stat(m.cfg.EmbedModel); err == nil {
+			cmds = append(cmds, m.startEmbedServerCmd())
+		}
 	}
 	if m.autoLoad {
 		if m.sourceIn.Value() != "" || m.sourceMode == 1 {
@@ -198,7 +198,7 @@ func (m *tuiModel) Init() tea.Cmd {
 
 func (m *tuiModel) startServerCmd() tea.Cmd {
 	return func() tea.Msg {
-		srv, err := modelsvc.StartServer(m.ctx, "llama-server", m.cfg.LLMModel, 18973, 4096, false)
+		srv, err := modelsvc.StartServer(m.ctx, "llama-server", m.cfg.LLMModel, 18973, 8192, false)
 		if err != nil {
 			return serverReadyMsg{err: err}
 		}
@@ -245,11 +245,20 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.summary == nil {
 				m.summary = map[string]string{}
 			}
-			for k, v := range m.state.Summaries {
-				if strings.Contains(v, "change (") && !strings.Contains(v, "\n") {
+			for path, raw := range m.state.Summaries {
+				// old single-line heuristic placeholders are not summaries
+				if strings.Contains(raw, "change (") && !strings.Contains(raw, "\n") {
 					continue
 				}
-				m.summary[k] = v
+				var cf *models.ChangedFile
+				for i := range v.pr.Files {
+					if v.pr.Files[i].Path == path {
+						cf = &v.pr.Files[i]
+						break
+					}
+				}
+				// normalize old state entries to the canonical 4-bullet shape
+				m.summary[path] = review.FormatRationale(raw, cf)
 			}
 		}
 		m.loadingMsg = "planning review order..."
@@ -269,35 +278,30 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.plan = p
 			review.ApplyState(m.plan, m.state)
 		}
+		if v.fromAI && m.plan != nil {
+			// Persist the AI summary for every file exactly once. Summaries
+			// already persisted (loaded above into m.summary) always win, so
+			// replans and later sessions never change them.
+			for i := range m.plan.Steps {
+				s := m.plan.Steps[i]
+				if strings.TrimSpace(s.Rationale) == "" {
+					continue
+				}
+				if old, ok := m.summary[s.Path]; ok && strings.Contains(old, "- Intent:") {
+					continue
+				}
+				m.summary[s.Path] = s.Rationale
+			}
+			m.saveProgress()
+		}
 		m.current = firstPending(m.plan)
 		m.screen = screenReview
 		m.setDiffContent()
-		// load state summaries
-		if m.state != nil && m.state.Summaries != nil {
-			for k, v := range m.state.Summaries {
-				if _, ok := m.summary[k]; !ok {
-					m.summary[k] = v
-				}
-			}
-		}
-		// Rationale from the plan already provides the guided summary.
-		// Only fetch an on-demand deep summary when requested.
-		m.setDiffContent()
-		return m, nil
-
-	case summaryMsg:
-		if v.summary != "" && v.fromAI {
-			m.summary[v.path] = v.summary
-		}
-		if m.stepPath(m.current) == v.path {
-			m.setDiffContent()
-		}
-		m.saveProgress()
 		return m, nil
 
 	case searchDoneMsg:
 		if v.err != nil {
-			m.status = "search error: " + v.err.Error()
+			m.status = "ask error: " + v.err.Error()
 		} else {
 			m.queryResults = v.results
 			if len(v.results) > 0 {
@@ -315,7 +319,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.screen = screenReview
 		m.setDiffContent()
-		return m, m.fetchSummaryCmd(m.stepPath(m.current))
+		return m, nil
 
 	case embedReadyMsg:
 		if v.err == nil {
@@ -353,6 +357,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case downloadProgressMsg:
 		m.dlDone = v.downloaded
 		m.dlTotal = v.total
+		if v.total > 0 {
+			m.status = fmt.Sprintf("downloading model... %.0f%%", 100*float64(v.downloaded)/float64(v.total))
+		} else {
+			m.status = "downloading model..."
+		}
 		return m, nil
 
 	case downloadDoneMsg:
@@ -447,15 +456,14 @@ func (m *tuiModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "n", "right":
 			if m.current < stepCount(m.plan)-1 {
 				m.current++
-				m.saveProgress()
 				m.setDiffContent()
-				return m, m.fetchSummaryCmd(m.stepPath(m.current))
+				return m, nil
 			}
 		case "p", "left":
 			if m.current > 0 {
 				m.current--
 				m.setDiffContent()
-				return m, m.fetchSummaryCmd(m.stepPath(m.current))
+				return m, nil
 			}
 		case "m":
 			if m.plan != nil && m.current < len(m.plan.Steps) {
@@ -511,7 +519,7 @@ func (m *tuiModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.screen = screenReview
 				return m, nil
 			}
-			m.status = "searching..."
+			m.status = "asking..."
 			return m, m.searchCmd(q)
 		case "esc":
 			m.queryIn.Blur()
@@ -570,56 +578,28 @@ func (m *tuiModel) loadPRCmd() tea.Cmd {
 func (m *tuiModel) planCmd() tea.Cmd {
 	pr := m.pr
 	client := m.client
+	ctx := m.ctx
 	return func() tea.Msg {
+		pctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
 		planner := review.NewPlanner(client, m.embedClient)
-		plan, err := planner.Plan(context.Background(), pr)
-		return planReadyMsg{plan: plan, err: err}
-	}
-}
-
-func (m *tuiModel) fetchSummaryCmd(path string) tea.Cmd {
-	if path == "" {
-		return nil
-	}
-	if cached, ok := m.summary[path]; ok && cached != "" {
-		return func() tea.Msg { return summaryMsg{path: path, summary: cached, fromAI: true} }
-	}
-	pr := m.pr
-	client := m.client
-	return func() tea.Msg {
-		// find file
-		var cf *models.ChangedFile
-		for i := range pr.Files {
-			if pr.Files[i].Path == path {
-				cf = &pr.Files[i]
-				break
-			}
-		}
-		if cf == nil {
-			return summaryMsg{path: path, summary: ""}
-		}
-		if client == nil {
-			return summaryMsg{path: path, summary: "", fromAI: false}
-		}
-		planner := review.NewPlanner(client, m.embedClient)
-		s := planner.FileSummary(context.Background(), cf)
-		fromAI := client != nil && !strings.HasPrefix(strings.TrimSpace(s), "ERROR ")
-		return summaryMsg{path: path, summary: s, fromAI: fromAI}
+		plan, err := planner.Plan(pctx, pr)
+		return planReadyMsg{plan: plan, err: err, fromAI: client != nil}
 	}
 }
 
 func (m *tuiModel) searchCmd(q string) tea.Cmd {
 	pr := m.pr
 	client := m.client
+	ctx := m.ctx
 	return func() tea.Msg {
+		sctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
 		planner := review.NewPlanner(client, m.embedClient)
-		res := planner.Search(context.Background(), pr, q)
+		res := planner.Search(sctx, pr, q)
 		return searchDoneMsg{query: q, results: res}
 	}
 }
-
-// placeholders to satisfy compile; replaced in View? We'll adjust.
-func pr2stepsPlaceholder() []int { return nil }
 
 func (m *tuiModel) downloadModelCmd() tea.Cmd {
 	m.downloading = true
@@ -633,8 +613,6 @@ func (m *tuiModel) downloadModelCmd() tea.Cmd {
 			return
 		}
 		err := modelsvc.Download(m.ctx, m.cfg.LLMModelURL, m.cfg.LLMModel, func(d, t int64) {
-			m.dlDone = d
-			m.dlTotal = t
 			if m.program != nil {
 				m.program.Send(downloadProgressMsg{downloaded: d, total: t})
 			}
@@ -664,7 +642,7 @@ func (m *tuiModel) saveProgress() {
 	st.Skipped = map[string]bool{}
 	st.Summaries = map[string]string{}
 	for k, v := range m.summary {
-		if strings.TrimSpace(v) != "" && strings.Contains(v, "\n") {
+		if strings.Contains(v, "- Intent:") {
 			st.Summaries[k] = v
 		}
 	}
@@ -681,13 +659,15 @@ func (m *tuiModel) saveProgress() {
 }
 
 func (m *tuiModel) Shutdown() {
-	m.cancel()
-	if m.server != nil {
-		m.server.Stop()
-	}
-	if m.embedServer != nil {
-		m.embedServer.Stop()
-	}
+	m.shutdownOnce.Do(func() {
+		m.cancel()
+		if m.server != nil {
+			m.server.Stop()
+		}
+		if m.embedServer != nil {
+			m.embedServer.Stop()
+		}
+	})
 }
 func (m *tuiModel) SetProgram(p *tea.Program) { m.program = p }
 
@@ -725,23 +705,40 @@ func (m *tuiModel) setDiffContent() {
 		b.WriteString(s)
 	} else {
 		// Fall back to the plan rationale so the review is useful immediately.
-		if m.plan != nil && m.current < len(m.plan.Steps) {
-			b.WriteString(m.plan.Steps[m.current].Rationale)
-			if len(m.plan.Steps[m.current].Focus) > 0 {
-				b.WriteString("\nFocus: " + strings.Join(m.plan.Steps[m.current].Focus, "; "))
-			}
-		} else {
-			b.WriteString("(loading...)")
+		b.WriteString(m.plan.Steps[m.current].Rationale)
+		if len(m.plan.Steps[m.current].Focus) > 0 {
+			b.WriteString("\nFocus: " + strings.Join(m.plan.Steps[m.current].Focus, "; "))
 		}
 	}
 	b.WriteString("\n\n--- diff ---\n")
 	if cf != nil {
-		b.WriteString(colorizeDiff(cf.Patch))
+		b.WriteString(colorizeDiff(capDiff(cf.Patch)))
 	} else {
 		b.WriteString("(no diff)")
 	}
 	m.viewport.SetContent(b.String())
 	m.viewport.GotoTop()
+}
+
+// maxDiffLines bounds how much of a very large patch we render, keeping the
+// viewport fast and memory flat on huge PRs.
+const maxDiffLines = 1500
+
+func capDiff(patch string) string {
+	total := strings.Count(patch, "\n")
+	if total <= maxDiffLines {
+		return patch
+	}
+	idx := 0
+	for i := 0; i < maxDiffLines; i++ {
+		j := strings.IndexByte(patch[idx:], '\n')
+		if j < 0 {
+			idx = len(patch)
+			break
+		}
+		idx += j + 1
+	}
+	return patch[:idx] + fmt.Sprintf("\n... (%d more lines not shown)\n", total-maxDiffLines)
 }
 
 func safeAdd(cf *models.ChangedFile) int {

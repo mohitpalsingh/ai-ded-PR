@@ -1,11 +1,13 @@
 package review
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -80,32 +82,163 @@ func heuristicPlan(pr *models.PullRequest) *models.ReviewPlan {
 	return &models.ReviewPlan{Summary: summary, Steps: steps}
 }
 
-func descriptiveRationale(f models.ChangedFile) string {
+// --- rationale formatting ---------------------------------------------------
+
+// rationaleLabelRe finds section labels such as "Intent:", "Dependencies:",
+// "Contracts impacted:", "Verify:" and "Risk:" in model output.
+var rationaleLabelRe = regexp.MustCompile(`(?i)(intent|dependencies|dependency|contracts?|verify|verification|checks?|risk)\s*[:：]`)
+
+type rationaleParts struct {
+	intent, deps, verify, risk string
+}
+
+func labelKind(l string) string {
+	switch {
+	case strings.HasPrefix(l, "intent"):
+		return "intent"
+	case strings.HasPrefix(l, "depend"), strings.HasPrefix(l, "contract"):
+		return "deps"
+	case strings.HasPrefix(l, "verify"), strings.HasPrefix(l, "verification"), strings.HasPrefix(l, "check"):
+		return "verify"
+	default:
+		return "risk"
+	}
+}
+
+// flattenRationale strips markdown emphasis/labels and leading bullet chars so
+// section detection works on plain text.
+func flattenRationale(s string) string {
+	s = strings.ReplaceAll(s, "**", "")
+	s = strings.ReplaceAll(s, "__", "")
+	s = strings.ReplaceAll(s, "`", "")
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(ln), "-*•◦# \t"))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func tidySection(s string) string {
+	s = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(s)
+	s = strings.Join(strings.Fields(s), " ")
+	return strings.Trim(s, " -:.,;")
+}
+
+func appendPart(dst *string, s string) {
+	if *dst == "" {
+		*dst = s
+		return
+	}
+	*dst += " " + s
+}
+
+func splitRationale(raw string) rationaleParts {
+	var out rationaleParts
+	text := flattenRationale(raw)
+	locs := rationaleLabelRe.FindAllStringSubmatchIndex(text, -1)
+	if len(locs) == 0 {
+		out.intent = tidySection(text)
+		return out
+	}
+	if locs[0][0] > 0 {
+		out.intent = tidySection(text[:locs[0][0]])
+	}
+	assign := func(kind, content string) {
+		content = tidySection(content)
+		if content == "" {
+			return
+		}
+		switch kind {
+		case "intent":
+			appendPart(&out.intent, content)
+		case "deps":
+			appendPart(&out.deps, content)
+		case "verify":
+			appendPart(&out.verify, content)
+		case "risk":
+			appendPart(&out.risk, content)
+		}
+	}
+	for i, m := range locs {
+		end := len(text)
+		if i+1 < len(locs) {
+			end = locs[i+1][0]
+		}
+		assign(labelKind(strings.ToLower(text[m[2]:m[3]])), text[m[1]:end])
+	}
+	return out
+}
+
+func clipWords(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := s[:n]
+	if i := strings.LastIndex(cut, " "); i > n/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimSpace(cut) + "..."
+}
+
+func defaultIntent(f *models.ChangedFile) string {
 	status := f.Status
 	if status == "" {
-		status = "change"
+		status = "modified"
 	}
-	lang := f.Language
-	if lang == "" {
-		lang = "source"
+	s := fmt.Sprintf("modifies %s (%s, +%d/-%d)", f.Path, status, f.Additions, f.Deletions)
+	if f.Language != "" {
+		s += " " + f.Language
 	}
-	return fmt.Sprintf("%s modifies %s (%s, +%d/-%d lines). Review it at this point because its hunks "+
-		"introduce behavior that dependent files and tests build on; verify the diff for correctness, "+
-		"edge cases, and consistency with the surrounding module.", f.Path, status, lang, f.Additions, f.Deletions)
+	return s
+}
+
+func defaultRisk(f *models.ChangedFile) string {
+	churn := f.Additions + f.Deletions
+	switch {
+	case churn >= 400:
+		return "high churn; review in chunks and watch for regressions"
+	case churn >= 100:
+		return "medium churn; check edge cases in the changed hunks"
+	default:
+		return "low churn; quick correctness pass"
+	}
+}
+
+func buildRationale(p rationaleParts, f *models.ChangedFile) string {
+	if p.intent == "" {
+		p.intent = defaultIntent(f)
+	}
+	if p.deps == "" {
+		p.deps = "check callers, tests and configuration that reference this file"
+	}
+	if p.verify == "" {
+		p.verify = "walk each hunk for correctness, edge cases and consistency with surrounding code"
+	}
+	if p.risk == "" {
+		p.risk = defaultRisk(f)
+	}
+	return strings.Join([]string{
+		"- Intent: " + clipWords(p.intent, 200),
+		"- Dependencies: " + clipWords(p.deps, 160),
+		"- Verify: " + clipWords(p.verify, 160),
+		"- Risk: " + clipWords(p.risk, 160),
+	}, "\n")
+}
+
+// FormatRationale normalizes any summary/rationale text into the canonical
+// four-bullet review format so every file reads consistently.
+func FormatRationale(raw string, f *models.ChangedFile) string {
+	if f == nil {
+		f = &models.ChangedFile{}
+	}
+	if strings.TrimSpace(raw) == "" {
+		return buildRationale(rationaleParts{}, f)
+	}
+	return buildRationale(splitRationale(raw), f)
 }
 
 func heuristicRationale(f models.ChangedFile) string {
-	l := strings.ToLower(f.Path)
-	if strings.Contains(l, "model") || strings.Contains(l, "type") {
-		return "Foundational types: review first to understand new shapes."
-	}
-	if strings.Contains(l, "test") {
-		return "Tests: verify expected behavior and edge cases."
-	}
-	if strings.Contains(l, "config") || strings.HasSuffix(l, ".md") {
-		return "Config/docs: low-risk, review last."
-	}
-	return fmt.Sprintf("Changed %d lines; review with dependent callers in mind.", f.Additions+f.Deletions)
+	return buildRationale(rationaleParts{}, &f)
 }
 
 func (p *Planner) Plan(ctx context.Context, pr *models.PullRequest) (*models.ReviewPlan, error) {
@@ -115,7 +248,8 @@ func (p *Planner) Plan(ctx context.Context, pr *models.PullRequest) (*models.Rev
 		plan.Steps = reorderStepsByCluster(plan.Steps, semanticClusters(pr, p.fileEmbed))
 		return plan, nil
 	}
-	// Build compact file list
+	// Build compact file list. Always keep every file in the prompt: hunk
+	// headers are shed first so the model never silently loses files.
 	type fsummary struct {
 		Path   string   `json:"path"`
 		Status string   `json:"status"`
@@ -130,14 +264,23 @@ func (p *Planner) Plan(ctx context.Context, pr *models.PullRequest) (*models.Rev
 			if h.Header != "" {
 				hs = append(hs, h.Header)
 			}
+			if len(hs) >= 6 {
+				break
+			}
 		}
 		files = append(files, fsummary{Path: f.Path, Status: f.Status, Add: f.Additions, Del: f.Deletions, Hunks: hs})
 	}
 	p.ensureFileEmbeddings(ctx, pr)
 	clusters := semanticClusters(pr, p.fileEmbed)
 	fb, _ := json.Marshal(files)
-	if len(fb) > 7000 {
-		fb = append(fb[:7000], []byte("...")...)
+	if len(fb) > 12000 {
+		for i := range files {
+			files[i].Hunks = nil
+		}
+		fb, _ = json.Marshal(files)
+	}
+	if len(fb) > 12000 {
+		fb = append(fb[:12000], []byte("...")...)
 	}
 	clusterText := ""
 	if len(clusters) > 0 {
@@ -151,15 +294,17 @@ PR Body: %s
 Files (JSON): %s%s
 
 Return ONLY valid JSON with this shape:
-{"summary":"2-3 sentence overview of what the PR does and its risk","steps":[{"order":1,"path":"...","rationale":"- Intent: ...
-- Dependencies/Contracts: ...
-- Verify: ...
-- Risk: ...","focus":["specific check"],"risk":"low|medium|high","est_minutes":2}]}
+{"summary":"2-3 sentence overview of what the PR does and its risk","steps":[{"order":1,"path":"...","rationale":"- Intent: ...\n- Dependencies: ...\n- Verify: ...\n- Risk: ...","focus":["specific check"],"risk":"low|medium|high","est_minutes":2}]}
 Rules:
-- Rationale must reference concrete code changes (added/removed behavior, symbols, paths) and be at least 25 words. No generic placeholders like "why now".
+- Rationale must be exactly four bullet lines, in this order and with these exact prefixes: "- Intent: ", "- Dependencies: ", "- Verify: ", "- Risk: ".
+- Rationale must reference concrete code changes (added/removed behavior, symbols, paths). Keep every bullet under 20 words. No generic placeholders like "why now".
 - Keep semantic clusters together.
 - Order files to minimize cognitive load: foundational types/models -> core logic -> callers/API/UI -> tests -> config/docs.
-- Path must be one of the changed files.`, pr.Title, truncate(pr.Body, 1500), string(fb), clusterText)
+- Path must be one of the changed files.
+- Include exactly one step for every file listed above; never omit a file.`, pr.Title, truncate(pr.Body, 1500), string(fb), clusterText)
+	if os.Getenv("AI_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "PLAN prompt=%d bytes files=%d\n", len(prompt), len(files))
+	}
 
 	out, err := p.Client.Chat(ctx, "You only output valid JSON, no markdown.", prompt)
 	if err != nil {
@@ -169,99 +314,410 @@ Rules:
 	if os.Getenv("AI_DEBUG") != "" {
 		fmt.Fprintln(os.Stderr, "RAW JSON: "+out)
 	}
-	var plan models.ReviewPlan
-	parseErr := json.Unmarshal([]byte(out), &plan)
+	wp, parseErr := parsePlan(out)
 	if parseErr != nil {
-		for _, suf := range []string{"}", "}"} {
-			if err := json.Unmarshal([]byte(strings.TrimSpace(out)+suf), &plan); err == nil {
-				parseErr = nil
-				break
-			}
-		}
-	}
-	if parseErr != nil {
+		// Don't give up: the retry below asks for a strict JSON plan, and any
+		// file still missing gets a heuristic summary instead of nothing.
 		if os.Getenv("AI_DEBUG") != "" {
-			fmt.Fprintln(os.Stderr, "PARSE ERR: "+parseErr.Error())
+			fmt.Fprintln(os.Stderr, "PARSE ERR (will retry): "+parseErr.Error())
 		}
-		return heuristicPlan(pr), nil
+		wp = planWire{}
 	}
 	if os.Getenv("AI_DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "PARSED steps=%d summary=%q\n", len(plan.Steps), plan.Summary)
+		fmt.Fprintf(os.Stderr, "PARSED steps=%d summary=%q\n", len(wp.Steps), wp.Summary)
 	}
 	// validate paths and fill missing
-	known := map[string]bool{}
-	for _, f := range pr.Files {
-		known[f.Path] = true
+	byPath := map[string]*models.ChangedFile{}
+	for i := range pr.Files {
+		byPath[pr.Files[i].Path] = &pr.Files[i]
 	}
-	// ensure all steps map to known files; drop unknown, fill status
-	steps := []models.ReviewStep{}
 	seen := map[string]bool{}
-	for _, s := range plan.Steps {
-		if !known[s.Path] || seen[s.Path] {
-			continue
-		}
-		seen[s.Path] = true
-		if s.Status == "" {
-			s.Status = models.StatusPending
-		}
-		r := strings.TrimSpace(s.Rationale)
-		if r == "" || strings.EqualFold(r, "why now") {
-			var f *models.ChangedFile
-			for i := range pr.Files {
-				if pr.Files[i].Path == s.Path {
-					f = &pr.Files[i]
-					break
-				}
-			}
-			if f != nil {
-				if p.Client != nil {
-					sum := p.FileSummary(ctx, f)
-					if sum != "" {
-						s.Rationale = sum
-					} else {
-						s.Rationale = descriptiveRationale(*f)
-					}
-				} else {
-					s.Rationale = descriptiveRationale(*f)
-				}
+	steps := wireToSteps(wp.Steps, byPath, seen)
+	// If the model omitted files (truncated output, schema drift), retry once
+	// with a compact prompt so every file still gets an AI-authored rationale.
+	if len(seen) < len(pr.Files) && p.Client != nil {
+		var missing []fsummary
+		for _, f := range pr.Files {
+			if !seen[f.Path] {
+				missing = append(missing, fsummary{Path: f.Path, Status: f.Status, Add: f.Additions, Del: f.Deletions})
 			}
 		}
-		if strings.TrimSpace(s.Rationale) == "" {
-			s.Rationale = heuristicRationale(models.ChangedFile{Path: s.Path})
+		mb, _ := json.Marshal(missing)
+		followUp := fmt.Sprintf(`You are an expert code reviewer producing a guided review plan.
+Return ONLY valid JSON: {"steps":[{"path":"...","rationale":"- Intent: ...\n- Dependencies: ...\n- Verify: ...\n- Risk: ...","focus":["specific check"],"risk":"low|medium|high"}]}
+Rules:
+- Include exactly one step for every file below.
+- rationale must be exactly four bullet lines with prefixes "- Intent: ", "- Dependencies: ", "- Verify: ", "- Risk: ", each under 20 words.
+- Output MUST start with { and end with }: no prose, no markdown, no code fences.
+Files (JSON): %s`, string(mb))
+		if out2, err2 := p.Client.Chat(ctx, "You only output valid JSON, no markdown.", followUp); err2 == nil {
+			if wp2, err3 := parsePlan(out2); err3 == nil {
+				steps = append(steps, wireToSteps(wp2.Steps, byPath, seen)...)
+			}
 		}
-		rk := strings.ToLower(strings.TrimSpace(s.Risk))
-		if rk != "low" && rk != "medium" && rk != "high" {
-			s.Risk = "medium"
-		} else {
-			s.Risk = rk
-		}
-		steps = append(steps, s)
 	}
 	// append any missing files
 	for _, f := range pr.Files {
 		if !seen[f.Path] {
-			rat := heuristicRationale(f)
-			if p.Client != nil {
-				if sum := p.FileSummary(ctx, &f); strings.TrimSpace(sum) != "" {
-					rat = sum
-				}
-			}
-			risk := "medium"
-			steps = append(steps, models.ReviewStep{Path: f.Path, Rationale: rat, Risk: risk, Status: models.StatusPending})
+			steps = append(steps, models.ReviewStep{Path: f.Path, Rationale: heuristicRationale(f), Risk: "medium", Status: models.StatusPending})
+		}
+	}
+	// normalize every rationale so all files read in the same 4-bullet shape
+	for i := range steps {
+		if f := byPath[steps[i].Path]; f != nil {
+			steps[i].Rationale = FormatRationale(steps[i].Rationale, f)
 		}
 	}
 	for i := range steps {
 		steps[i].Order = i + 1
 	}
-	if plan.Summary == "" {
-		plan.Summary = heuristicPlan(pr).Summary
+	if strings.TrimSpace(string(wp.Summary)) == "" {
+		wp.Summary = flexString(heuristicPlan(pr).Summary)
 	}
 	steps = reorderStepsByCluster(steps, clusters)
-	plan.Steps = steps
+	plan := models.ReviewPlan{Summary: string(wp.Summary), Steps: steps}
 	if len(plan.Steps) == 0 {
 		return heuristicPlan(pr), nil
 	}
 	return &plan, nil
+}
+
+// planWire mirrors the review-plan JSON while tolerating alternate field names
+// and shapes (arrays of bullet strings, sibling intent/verify/risk keys, and
+// trailing commas) that smaller models tend to emit.
+type planWire struct {
+	Summary flexString `json:"summary"`
+	Steps   []stepWire `json:"steps"`
+}
+
+type stepWire struct {
+	Order      int           `json:"order"`
+	Path       string        `json:"path"`
+	Rationale  flexRationale `json:"rationale"`
+	Intent     flexString    `json:"intent"`
+	Deps       flexString    `json:"dependencies"`
+	DepsAlt    flexString    `json:"dependencies_contracts"`
+	Contracts  flexString    `json:"contracts"`
+	Verify     flexString    `json:"verify"`
+	RiskText   flexString    `json:"risk"`
+	Focus      []string      `json:"focus"`
+	EstMinutes int           `json:"est_minutes"`
+}
+
+// flexRationale accepts the rationale as a string, an array of strings, or an
+// object with intent/dependencies/verify/risk keys (models differ), and
+// normalizes objects into the canonical bullet layout.
+type flexRationale string
+
+func (f *flexRationale) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '{' {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(b, &obj); err != nil {
+			return err
+		}
+		pick := func(keys ...string) string {
+			for _, k := range keys {
+				for kk, v := range obj {
+					if !strings.EqualFold(kk, k) {
+						continue
+					}
+					var s string
+					if json.Unmarshal(v, &s) == nil {
+						return strings.TrimSpace(s)
+					}
+					var arr []string
+					if json.Unmarshal(v, &arr) == nil {
+						return strings.TrimSpace(strings.Join(arr, " "))
+					}
+				}
+			}
+			return ""
+		}
+		var lines []string
+		if v := pick("intent"); v != "" {
+			lines = append(lines, "- Intent: "+v)
+		}
+		if v := pick("dependencies", "dependencies_contracts", "contracts", "deps"); v != "" {
+			lines = append(lines, "- Dependencies: "+v)
+		}
+		if v := pick("verify", "verification"); v != "" {
+			lines = append(lines, "- Verify: "+v)
+		}
+		if v := pick("risk"); v != "" {
+			lines = append(lines, "- Risk: "+v)
+		}
+		if len(lines) == 0 {
+			return fmt.Errorf("flexRationale: object without recognizable keys")
+		}
+		*f = flexRationale(strings.Join(lines, "\n"))
+		return nil
+	}
+	var fs flexString
+	if err := fs.UnmarshalJSON(b); err != nil {
+		return err
+	}
+	*f = flexRationale(fs)
+	return nil
+}
+
+// flexString accepts a JSON string or an array of strings/values.
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	switch b[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*f = flexString(s)
+		return nil
+	case '[':
+		var parts []string
+		var raws []json.RawMessage
+		if err := json.Unmarshal(b, &raws); err != nil {
+			return err
+		}
+		for _, raw := range raws {
+			var s string
+			if json.Unmarshal(raw, &s) == nil {
+				parts = append(parts, s)
+				continue
+			}
+			var n float64
+			if json.Unmarshal(raw, &n) == nil {
+				parts = append(parts, fmt.Sprintf("%g", n))
+				continue
+			}
+			parts = append(parts, string(raw))
+		}
+		*f = flexString(strings.Join(parts, "\n"))
+		return nil
+	default:
+		var n float64
+		if err := json.Unmarshal(b, &n); err == nil {
+			*f = flexString(fmt.Sprintf("%g", n))
+			return nil
+		}
+		return fmt.Errorf("flexString: unsupported JSON %q", string(b))
+	}
+}
+
+var trailingCommaRe = regexp.MustCompile(`,\s*([}\]])`)
+
+// sanitizeJSON removes trailing commas before closing braces/brackets.
+func sanitizeJSON(s string) string {
+	return trailingCommaRe.ReplaceAllString(s, "$1")
+}
+
+// trimToJSON cuts leading/trailing prose around the outermost JSON object.
+func trimToJSON(s string) string {
+	i := strings.Index(s, "{")
+	j := strings.LastIndex(s, "}")
+	if i >= 0 && j > i {
+		return s[i : j+1]
+	}
+	return s
+}
+
+// unmarshalPlan tries the payload as-is plus common truncation repairs.
+func unmarshalPlan(s string, wp *planWire) error {
+	s = strings.TrimSpace(s)
+	variants := []string{s, trimToJSON(s), sanitizeJSON(s), sanitizeJSON(trimToJSON(s))}
+	var candidates []string
+	seen := map[string]bool{}
+	for _, v := range variants {
+		for _, c := range []string{v, v + "}", v + "]}", v + "}]}", v + ",\"summary\":\"\"}]}"} {
+			if !seen[c] {
+				seen[c] = true
+				candidates = append(candidates, c)
+			}
+		}
+	}
+	var err error
+	for _, c := range candidates {
+		if err = json.Unmarshal([]byte(c), wp); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// salvageSteps extracts intact step objects from a model response, even when
+// the surrounding JSON is truncated or malformed. Braces inside strings and
+// nested objects are handled by tracking depth, not by regex.
+func salvageSteps(s string) []stepWire {
+	var out []stepWire
+	var stack []int
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '"':
+			// skip string contents (handling escapes) so braces inside don't count
+			i++
+			for i < len(s) {
+				if s[i] == '\\' {
+					i += 2
+					continue
+				}
+				if s[i] == '"' {
+					break
+				}
+				i++
+			}
+		case '{':
+			stack = append(stack, i)
+		case '}':
+			if len(stack) == 0 {
+				continue
+			}
+			start := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			obj := s[start : i+1]
+			if !strings.Contains(obj, `"path"`) {
+				continue
+			}
+			for _, candidate := range []string{obj, sanitizeJSON(obj)} {
+				var w stepWire
+				if json.Unmarshal([]byte(candidate), &w) == nil && w.Path != "" {
+					out = append(out, w)
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// parsePlan decodes a model response, salvaging intact steps from truncated output.
+func parsePlan(out string) (planWire, error) {
+	var wp planWire
+	err := unmarshalPlan(out, &wp)
+	if err != nil {
+		if ws := salvageSteps(out); len(ws) > 0 {
+			return planWire{Steps: ws}, nil
+		}
+	}
+	return wp, err
+}
+
+// lookupFile resolves a model-provided path to a changed file, tolerating
+// "./" prefixes and unambiguous suffix matches.
+func lookupFile(byPath map[string]*models.ChangedFile, p string) *models.ChangedFile {
+	if f := byPath[p]; f != nil {
+		return f
+	}
+	q := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(p), "./"), "/")
+	if f := byPath[q]; f != nil {
+		return f
+	}
+	if q == "" {
+		return nil
+	}
+	var found *models.ChangedFile
+	for path, f := range byPath {
+		if strings.HasSuffix(path, "/"+q) {
+			if found != nil {
+				return nil // ambiguous
+			}
+			found = f
+		}
+	}
+	return found
+}
+
+// wireToSteps maps parsed model steps onto known changed files, tolerating
+// alternate field names and formatting every rationale canonically.
+func wireToSteps(ws []stepWire, byPath map[string]*models.ChangedFile, seen map[string]bool) []models.ReviewStep {
+	var steps []models.ReviewStep
+	for _, w := range ws {
+		f := lookupFile(byPath, w.Path)
+		if f == nil || seen[f.Path] {
+			continue
+		}
+		seen[f.Path] = true
+		// tolerate models that emit sibling keys instead of the 4-bullet rationale
+		parts := splitRationale(string(w.Rationale))
+		if parts.intent == "" {
+			parts.intent = tidySection(string(w.Intent))
+		}
+		if parts.deps == "" {
+			parts.deps = tidySection(firstNonEmpty(string(w.Deps), string(w.DepsAlt), string(w.Contracts)))
+		}
+		if parts.verify == "" {
+			parts.verify = tidySection(string(w.Verify))
+		}
+		riskText := tidySection(string(w.RiskText))
+		level := "medium"
+		switch strings.ToLower(riskText) {
+		case "low", "medium", "high":
+			level = strings.ToLower(riskText)
+		default:
+			if parts.risk == "" {
+				parts.risk = riskText
+			}
+		}
+		if isNoise(parts.intent) {
+			parts.intent = ""
+		}
+		if isNoise(parts.deps) {
+			parts.deps = ""
+		}
+		if isNoise(parts.verify) {
+			parts.verify = ""
+		}
+		if isNoise(parts.risk) {
+			parts.risk = ""
+		}
+		steps = append(steps, models.ReviewStep{
+			Path:       f.Path,
+			Rationale:  buildRationale(parts, f),
+			Focus:      compactFocus(w.Focus),
+			Risk:       level,
+			EstMinutes: w.EstMinutes,
+			Status:     models.StatusPending,
+		})
+	}
+	return steps
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func isNoise(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "none", "n/a", "na", "nil", "null", "unknown", "why now", "not applicable", "no dependencies":
+		return true
+	}
+	return false
+}
+
+func compactFocus(in []string) []string {
+	var out []string
+	for _, s := range in {
+		s = tidySection(s)
+		if s == "" || isNoise(s) {
+			continue
+		}
+		out = append(out, clipWords(s, 120))
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
 }
 
 func truncate(s string, n int) string {
@@ -285,66 +741,6 @@ func stripCodeFence(s string) string {
 		}
 	}
 	return strings.TrimSpace(s)
-}
-
-func cleanModelOutput(s string) string {
-	s = strings.TrimSpace(s)
-	// drop common conversational filler lines
-	badPrefixes := []string{"okay, here", "okay here", "here is", "here's", "here are", "let me know", "i hope", "please let", "concise summary", "review bullet"}
-	lines := strings.Split(s, "\n")
-	var keep []string
-	for _, ln := range lines {
-		l := strings.ToLower(strings.TrimSpace(ln))
-		drop := false
-		for _, bp := range badPrefixes {
-			if strings.HasPrefix(l, bp) || strings.Contains(l, bp) {
-				drop = true
-				break
-			}
-		}
-		if strings.Contains(l, "bullet") || strings.Contains(l, "let me know") {
-			drop = true
-		}
-		if drop {
-			continue
-		}
-		keep = append(keep, ln)
-	}
-	s = strings.TrimSpace(strings.Join(keep, "\n"))
-	// remove trailing follow-up sentences
-	if i := strings.Index(strings.ToLower(s), "let me know"); i >= 0 {
-		s = strings.TrimSpace(s[:i])
-	}
-	// cap to 6 lines to keep it scannable
-	ls := strings.Split(s, "\n")
-	if len(ls) > 6 {
-		ls = ls[:6]
-	}
-	return strings.TrimSpace(strings.Join(ls, "\n"))
-}
-
-// FileSummary asks LLM for a concise summary of one changed file.
-func (p *Planner) FileSummary(ctx context.Context, f *models.ChangedFile) string {
-	if p.Client == nil {
-		return fmt.Sprintf("%s: %s change (+%d/-%d).", f.Path, f.Status, f.Additions, f.Deletions)
-	}
-	patch := f.Patch
-	if len(patch) > 6000 {
-		patch = patch[:6000] + "\n...truncated..."
-	}
-	prompt := fmt.Sprintf(`Summarize this code change for a reviewer in exactly 4 short bullets. No intro, no outro, no headings. Bullets:
-- Intent: what changed
-- Dependencies/contracts impacted
-- Verify: what reviewer must check
-- Risk: key risk
-File: %s
-DIFF (truncated):
-%s`, f.Path, patch)
-	out, err := p.Client.Chat(ctx, "You are an expert code reviewer. Output only concise review bullets, no intro/outro.", prompt)
-	if err != nil {
-		return fmt.Sprintf("ERROR generating summary: %v", err)
-	}
-	return cleanModelOutput(out)
 }
 
 // SearchRoutes asks LLM which changed files are relevant to query.

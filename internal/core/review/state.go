@@ -15,15 +15,24 @@ func StatePath(pr *models.PullRequest) string {
 	if pr.URL != "" {
 		key = safe(pr.URL)
 	}
+	if pr.HeadSHA != "" {
+		key += "-" + shortSHA(pr.HeadSHA)
+	}
 	dir := filepath.Join(home, ".cache", "ai-pr-review", "state")
 	os.MkdirAll(dir, 0755)
 	return filepath.Join(dir, key+".json")
 }
 
-func safe(s string) string {
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, ":", "_")
+func shortSHA(s string) string {
+	if len(s) > 10 {
+		s = s[:10]
+	}
 	return s
+}
+
+func safe(s string) string {
+	repl := strings.NewReplacer("/", "_", ":", "_", "\\", "_", "#", "_", "?", "_", "*", "_", " ", "_")
+	return repl.Replace(s)
 }
 
 func itoa(n int) string {
@@ -76,13 +85,17 @@ func SaveState(pr *models.PullRequest, st *State) {
 	os.WriteFile(StatePath(pr), b, 0644)
 }
 
-// Apply restores statuses onto a plan.
+// Apply restores statuses and persisted per-file summaries onto a plan so
+// summaries are generated once and never recalculated.
 func ApplyState(plan *models.ReviewPlan, st *State) {
 	for i := range plan.Steps {
 		if st.Done[plan.Steps[i].Path] {
 			plan.Steps[i].Status = models.StatusDone
 		} else if st.Skipped[plan.Steps[i].Path] {
 			plan.Steps[i].Status = models.StatusSkipped
+		}
+		if s, ok := st.Summaries[plan.Steps[i].Path]; ok && strings.TrimSpace(s) != "" {
+			plan.Steps[i].Rationale = s
 		}
 	}
 }

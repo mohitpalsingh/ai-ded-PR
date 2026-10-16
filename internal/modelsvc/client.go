@@ -49,7 +49,7 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 			{Role: "user", Content: user},
 		},
 		Temperature: 0.2,
-		MaxTokens:   2048,
+		MaxTokens:   4096,
 	}
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/chat/completions", bytes.NewReader(b))
@@ -126,6 +126,3 @@ func (c *Client) Healthy(ctx context.Context) bool {
 	resp.Body.Close()
 	return resp.StatusCode < 500
 }
-
-// keep time import used
-var _ = time.Second

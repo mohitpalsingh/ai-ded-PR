@@ -31,6 +31,10 @@ func New(repoPath, base, head string) *Adapter {
 func (a *Adapter) Name() string { return "local" }
 
 func (a *Adapter) Load(ctx context.Context) (*models.PullRequest, error) {
+	// Normalize to an absolute path so persisted review state is keyed per repo.
+	if abs, err := filepath.Abs(a.RepoPath); err == nil {
+		a.RepoPath = abs
+	}
 	// validate repo
 	if _, err := exec.CommandContext(ctx, "git", "-C", a.RepoPath, "rev-parse", "--is-inside-work-tree").Output(); err != nil {
 		return nil, fmt.Errorf("not a git repo: %s", a.RepoPath)

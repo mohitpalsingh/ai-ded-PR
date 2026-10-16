@@ -20,6 +20,9 @@ import (
 	"github.com/mohit/ai-ded-pr/internal/tui"
 )
 
+// version is stamped via -ldflags "-X main.version=..." (see Makefile).
+var version = "dev"
+
 func main() {
 	// Support: `ai-ded-pr diff` and `ai-ded-pr branch-diff <branch> <base>`
 	if len(os.Args) > 1 && (os.Args[1] == "diff" || os.Args[1] == "branch-diff" || os.Args[1] == "ask") {
@@ -54,7 +57,13 @@ func main() {
 	queryFlag := flag.String("q", "", "Question for --ask")
 	dumpFlag := flag.Bool("dump", false, "Load PR, print review plan, exit")
 	aiDumpFlag := flag.Bool("ai-dump", false, "Use local model in dump (requires --model or default model)")
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println("ai-ded-pr", version)
+		return
+	}
 
 	// Make plain `ai-ded-pr diff` work with no extra params: review current repo.
 	if *githubFlag == "" && *repoFlag == "" {
@@ -72,15 +81,19 @@ func main() {
 
 	var opts []tui.Options
 	if *githubFlag != "" {
-		opts = append(opts, tui.Options{Mode: 0, Source: *githubFlag, AutoLoad: true})
+		opts = append(opts, tui.Options{Mode: 0, Source: *githubFlag, AutoLoad: true, Version: version})
 	} else {
 		if *repoFlag == "" {
 			*repoFlag = "."
 		}
-		opts = append(opts, tui.Options{Mode: 1, Source: *repoFlag, Base: *baseFlag, Head: *headFlag, AutoLoad: true})
+		opts = append(opts, tui.Options{Mode: 1, Source: *repoFlag, Base: *baseFlag, Head: *headFlag, AutoLoad: true, Version: version})
 	}
 
 	if *askFlag {
+		if *queryFlag == "" {
+			fmt.Println("usage: ai-ded-pr ask \"question\"")
+			return
+		}
 		ctx := context.Background()
 		var pr *models.PullRequest
 		var err error
@@ -110,7 +123,7 @@ func main() {
 				mp = *modelFlag
 			}
 			if _, err := os.Stat(mp); err == nil {
-				srv, err := modelsvc.StartServer(ctx, "llama-server", mp, 18993, 4096, false)
+				srv, err := modelsvc.StartServer(ctx, "llama-server", mp, 18993, 8192, false)
 				if err == nil {
 					client = modelsvc.NewClient(srv.URL)
 					for i := 0; i < 60 && !client.Healthy(ctx); i++ {
@@ -128,27 +141,29 @@ func main() {
 			}
 		}
 		q := *queryFlag
-		if q == "" {
-			fmt.Println("usage: ai-ded-pr ask \"question\"")
-			os.Exit(1)
-		}
 		planner := review.NewPlanner(client, embedClient)
+		// One planning call annotates every file (no per-file LLM calls).
+		var intents map[string]string
+		if client != nil {
+			if plan, err := planner.Plan(ctx, pr); err == nil {
+				intents = map[string]string{}
+				for _, s := range plan.Steps {
+					for _, ln := range strings.Split(s.Rationale, "\n") {
+						if strings.HasPrefix(ln, "- Intent: ") {
+							intents[s.Path] = strings.TrimPrefix(ln, "- Intent: ")
+							break
+						}
+					}
+				}
+			}
+		}
 		res := planner.Search(ctx, pr, q)
 		fmt.Printf("Question: %s\n", q)
 		fmt.Printf("Relevant files (%d):\n", len(res))
 		for _, r := range res {
 			fmt.Println("  -", r)
-			if client != nil {
-				var cf *models.ChangedFile
-				for i := range pr.Files {
-					if pr.Files[i].Path == r {
-						cf = &pr.Files[i]
-						break
-					}
-				}
-				if cf != nil {
-					fmt.Println(planner.FileSummary(ctx, cf))
-				}
+			if t := intents[r]; t != "" {
+				fmt.Println("      " + t)
 			}
 		}
 		return
@@ -181,7 +196,7 @@ func main() {
 				mp = *modelFlag
 			}
 			if _, err := os.Stat(mp); err == nil {
-				srv, err := modelsvc.StartServer(ctx, "llama-server", mp, 18993, 4096, false)
+				srv, err := modelsvc.StartServer(ctx, "llama-server", mp, 18993, 8192, false)
 				if err == nil {
 					client = modelsvc.NewClient(srv.URL)
 					defer srv.Stop()
@@ -221,11 +236,6 @@ func main() {
 			}
 		}
 		fmt.Println("Summary:", plan.Summary)
-		// test file summary for first file
-		if len(pr.Files) > 0 {
-			fmt.Println("--- file summary (first changed) ---")
-			fmt.Println(planner.FileSummary(ctx, &pr.Files[0]))
-		}
 		return
 	}
 
@@ -233,17 +243,19 @@ func main() {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	m.SetProgram(p)
 
-	// Ensure clean shutdown (kill llama-server children) on Ctrl+C / SIGTERM.
+	// Handle Ctrl+C / SIGTERM / SIGHUP without leaving llama-server children behind.
 	go func() {
 		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 		<-sigCh
 		m.Shutdown()
 		p.Quit()
 	}()
 
 	if _, err := p.Run(); err != nil {
+		m.Shutdown()
 		fmt.Println("error:", err)
 		os.Exit(1)
 	}
+	m.Shutdown()
 }

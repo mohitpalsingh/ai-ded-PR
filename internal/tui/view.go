@@ -19,20 +19,23 @@ var (
 
 func (m *tuiModel) viewWelcome() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("ai-ded-pr") + "  guided code review with local Gemma\n\n")
+	tag := "ai-ded-pr"
+	if m.version != "" && m.version != "dev" {
+		tag += " v" + m.version
+	}
+	b.WriteString(titleStyle.Render(tag) + "  guided code review with local Gemma\n\n")
 	b.WriteString("Sources:\n")
 	b.WriteString("  g  GitHub pull request (URL)\n")
 	b.WriteString("  l  Local git diff (repo path)\n")
 	b.WriteString("  d  Download / setup local model\n\n")
-	b.WriteString("Review keys: n/p next/prev file, j/k scroll, m mark done, s skip, / search, r replan, g new PR, q quit\n\n")
+	b.WriteString("Review keys: n/p next/prev file, j/k scroll, m done, / ask, r replan, g new PR, q quit\n\n")
 	if m.status != "" {
 		b.WriteString(statusStyle.Render(m.status) + "\n")
 	}
 	if m.downloading {
 		b.WriteString(fmt.Sprintf("Downloading model: %.1f / %.1f MB\n", float64(m.dlDone)/1e6, float64(m.dlTotal)/1e6))
-	}
-	if _, err := os.Stat(m.cfg.LLMModel); err != nil {
-		b.WriteString(errStyle.Render("Model not found. Press d to download (~2.5GB) or run heuristic-only review.") + "\n")
+	} else if _, err := os.Stat(m.cfg.LLMModel); err != nil {
+		b.WriteString(errStyle.Render("Model not set up yet: press d to download (~2.5GB) or continue with heuristic review.") + "\n")
 	} else {
 		b.WriteString(okStyle.Render("Model available.") + "\n")
 	}
@@ -111,7 +114,7 @@ func (m *tuiModel) viewReview() string {
 	rightBox := lipgloss.NewStyle().Width(rightWidth).Height(m.height - 3).Render(right)
 	main := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, "  ", rightBox)
 
-	bar := statusStyle.Render("n/p file · j/k scroll · m done · s skip · / search · r replan · ? help · q quit")
+	bar := statusStyle.Render("n/p file · j/k scroll · m done · s skip · / ask · r replan · ? help · q quit")
 	out := main + "\n" + bar
 	if m.help {
 		out += "\n" + boxStyle.Render(helpText())
@@ -129,7 +132,7 @@ func (m *tuiModel) viewQuery() string {
 			b.WriteString("  - " + r + "\n")
 		}
 	}
-	b.WriteString("\nenter search · esc back\n")
+	b.WriteString("\nenter ask · esc back\n")
 	if m.status != "" {
 		b.WriteString(statusStyle.Render(m.status) + "\n")
 	}

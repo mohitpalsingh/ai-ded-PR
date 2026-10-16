@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Install ai-ded-pr on macOS (Apple Silicon / Metal optimised).
 # - Installs prerequisites via Homebrew (go, llama.cpp)
-# - Builds the binary
+# - Builds the binary and links it into ~/.local/bin (no sudo)
 # - Downloads the default local models into ~/.cache/ai-pr-review/models
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,8 +22,7 @@ brew install go llama.cpp 2>&1 | tail -n 5
 
 echo "==> Building ai-ded-pr"
 cd "${ROOT_DIR}"
-mkdir -p "${ROOT_DIR}/build"
-go build -o "${ROOT_DIR}/build/review" ./cmd/review
+make build
 
 echo "==> Creating model cache"
 mkdir -p "${MODEL_DIR}"
@@ -34,18 +33,20 @@ download() {
     echo "   $name already present; skipping"
     return
   fi
-  echo "   Downloading $name..."
-  curl -L --fail --progress-bar -o "$dest" "$url"
+  echo "   Downloading $name (resumes if interrupted)..."
+  curl -L --fail --progress-bar -C - -o "$dest.part" "$url" && mv "$dest.part" "$dest"
 }
 
 download "$LLM_URL" "$LLM_MODEL" "Gemma 3 4B Q4"
 download "$EMBED_URL" "$EMBED_MODEL" "EmbeddingGemma 300M Q8 (optional semantic aid)"
 
-# Symlink into /usr/local/bin (may prompt for sudo)
-if [ -w /usr/local/bin ]; then
-  ln -sf "${ROOT_DIR}/build/review" /usr/local/bin/ai-ded-pr
-else
-  sudo ln -sf "${ROOT_DIR}/build/review" /usr/local/bin/ai-ded-pr
-fi
+echo "==> Linking into ~/.local/bin"
+BIN_DIR="${HOME}/.local/bin"
+mkdir -p "${BIN_DIR}"
+ln -sf "${ROOT_DIR}/build/ai-ded-pr" "${BIN_DIR}/ai-ded-pr"
+case ":${PATH}:" in
+  *":${BIN_DIR}:"*) ;;
+  *) echo "   NOTE: add ${BIN_DIR} to your PATH:"; echo "         export PATH=\"${BIN_DIR}:\$PATH\"";;
+esac
 
 echo "==> Done. Run: ai-ded-pr --help"

@@ -4,13 +4,16 @@ set -euo pipefail
 # Remove ai-ded-pr binaries, cache, state, logs and symlink.
 
 echo "==> Removing installed binary"
-if [ -L /usr/local/bin/ai-ded-pr ]; then
-  if [ -w /usr/local/bin ]; then
-    rm -f /usr/local/bin/ai-ded-pr
-  else
-    sudo rm -f /usr/local/bin/ai-ded-pr
+for d in "${HOME}/.local/bin" "/usr/local/bin"; do
+  target="${d}/ai-ded-pr"
+  if [ -L "${target}" ]; then
+    if [ -w "${d}" ]; then
+      rm -f "${target}"
+    else
+      sudo rm -f "${target}"
+    fi
   fi
-fi
+done
 
 echo "==> Removing cache, state and models"
 rm -rf "${HOME}/.cache/ai-pr-review"
