@@ -11,7 +11,7 @@
 On-device. No accounts. Nothing ever leaves your machine.
 
 ```text
-  ai-ded-pr v1.0.4  guided code review with local Gemma
+  ai-ded-pr v1.0.5  guided code review with local Gemma
   ┌─────────────────────────────┬──────────────────────────────────────────────┐
   │ ✓ 1 User.java               │ Rationale: - Intent: Adds OAuth refresh ...  │
   │ → 2 OrderService.java       │ - Dependencies: TokenService, Redis cache    │
@@ -110,4 +110,4 @@ make regression   # full end-to-end suite against a real repo + real model
 
 ## Status
 
-v1.0.4 — MIT License
+v1.0.5 — MIT License

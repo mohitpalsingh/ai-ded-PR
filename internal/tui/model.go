@@ -693,24 +693,17 @@ func (m *tuiModel) setDiffContent() {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  %s  (+%d/-%d)\n", statusIcon(m.plan.Steps[m.current].Status), path, safeAdd(cf), safeDel(cf))
-	fmt.Fprintf(&b, "Rationale: %s\n", m.plan.Steps[m.current].Rationale)
+	// One canonical block per file: the summary (persisted when available,
+	// otherwise the plan's rationale) is rendered exactly once.
+	summary := m.summary[path]
+	if summary == "" {
+		summary = m.plan.Steps[m.current].Rationale
+	}
+	fmt.Fprintf(&b, "Rationale: %s\n", summary)
 	if len(m.plan.Steps[m.current].Focus) > 0 {
 		fmt.Fprintf(&b, "Focus: %s\n", strings.Join(m.plan.Steps[m.current].Focus, "; "))
 	}
-	if m.plan.Steps[m.current].Risk != "" {
-		fmt.Fprintf(&b, "Risk: %s\n", m.plan.Steps[m.current].Risk)
-	}
-	b.WriteString("\n--- summary ---\n")
-	if s, ok := m.summary[path]; ok && s != "" {
-		b.WriteString(s)
-	} else {
-		// Fall back to the plan rationale so the review is useful immediately.
-		b.WriteString(m.plan.Steps[m.current].Rationale)
-		if len(m.plan.Steps[m.current].Focus) > 0 {
-			b.WriteString("\nFocus: " + strings.Join(m.plan.Steps[m.current].Focus, "; "))
-		}
-	}
-	b.WriteString("\n\n--- diff ---\n")
+	b.WriteString("\n--- diff ---\n")
 	if cf != nil {
 		b.WriteString(colorizeDiff(capDiff(cf.Patch)))
 	} else {
