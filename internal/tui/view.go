@@ -89,14 +89,7 @@ func (m *tuiModel) viewReview() string {
 	if m.pr == nil {
 		return "no PR"
 	}
-	leftWidth := 34
-	if m.width < 90 {
-		leftWidth = 30
-	}
-	rightWidth := m.width - leftWidth - 4
-	if rightWidth < 40 {
-		rightWidth = 40
-	}
+	leftWidth, rightWidth := m.paneWidths()
 	if m.height < 12 {
 		m.height = 24
 	}
@@ -154,6 +147,20 @@ func (m *tuiModel) viewQuery() string {
 		b.WriteString(statusStyle.Render(m.status) + "\n")
 	}
 	return boxStyle.Render(b.String())
+}
+
+// paneWidths returns the sidebar and diff-pane widths for the current
+// terminal size; both the layout and the viewport wrapping use the same math.
+func (m *tuiModel) paneWidths() (int, int) {
+	leftWidth := 34
+	if m.width < 90 {
+		leftWidth = 30
+	}
+	rightWidth := m.width - leftWidth - 4
+	if rightWidth < 40 {
+		rightWidth = 40
+	}
+	return leftWidth, rightWidth
 }
 
 func progressCounts(p *models.ReviewPlan) (int, int) {

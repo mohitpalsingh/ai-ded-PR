@@ -222,8 +222,13 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = v.Width
 		m.height = v.Height
-		m.viewport.Width = max(40, v.Width-40)
+		_, rw := m.paneWidths()
+		m.viewport.Width = rw
 		m.viewport.Height = max(10, v.Height-12)
+		// re-wrap the pane for the new width
+		if m.screen == screenReview {
+			m.setDiffContent()
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -767,14 +772,123 @@ func (m *tuiModel) setDiffContent() {
 		}
 		fmt.Fprintf(&b, "Deps: %s  (1-%d jump · b return)\n", strings.Join(parts, "  "), len(parts))
 	}
-	b.WriteString("\n--- diff ---\n")
+	// Wrap every line to the pane width before it reaches the viewport; the
+	// viewport clips long lines rather than wrapping them, which used to chop
+	// rationale bullets, dependency links and long diff lines mid-way.
+	// Wrapping plain text first keeps it ANSI-safe: coloring is applied only
+	// after the diff is wrapped.
+	w := m.viewport.Width
+	content := wrapText(b.String(), w)
+	content += "\n--- diff ---\n"
 	if cf != nil {
-		b.WriteString(colorizeDiff(capDiff(cf.Patch)))
+		content += colorizeDiff(wrapText(capDiff(cf.Patch), w))
 	} else {
-		b.WriteString("(no diff)")
+		content += "(no diff)"
 	}
-	m.viewport.SetContent(b.String())
+	m.viewport.SetContent(content)
 	m.viewport.GotoTop()
+}
+
+// wrapText wraps each line of plain text to at most limit columns at word
+// boundaries, preserving existing newlines. Words wider than the limit are
+// hard-split, so nothing is ever chopped. Call before adding ANSI styling.
+func wrapText(s string, limit int) string {
+	if limit < 8 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = wrapLine(line, limit)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// wrapLine wraps one line; continuation lines are indented two spaces past
+// the original indent so the wrap is visible.
+func wrapLine(line string, limit int) string {
+	if lipgloss.Width(line) <= limit {
+		return line
+	}
+	trimmed := strings.TrimLeft(line, " \t")
+	if trimmed == "" {
+		return line
+	}
+	indent := line[:len(line)-len(trimmed)]
+	cont := indent + "  "
+	if lipgloss.Width(cont)+10 > limit {
+		cont = indent
+	}
+	indentW, contW := lipgloss.Width(indent), lipgloss.Width(cont)
+	// Flatten: words that cannot fit on a fresh line get hard-split.
+	maxWord := limit - contW
+	if maxWord < 1 {
+		maxWord = 1
+	}
+	var words []string
+	for _, w := range strings.Fields(trimmed) {
+		for lipgloss.Width(w) > maxWord {
+			head, tail := splitAtWidth(w, maxWord)
+			if head == "" {
+				break
+			}
+			words = append(words, head)
+			w = tail
+		}
+		if w != "" {
+			words = append(words, w)
+		}
+	}
+	var out strings.Builder
+	cur := indent
+	curW := indentW
+	first := true
+	for _, w := range words {
+		wW := lipgloss.Width(w)
+		if curW > indentW && curW+1+wW > limit {
+			if !first {
+				out.WriteByte('\n')
+			}
+			out.WriteString(cur)
+			first = false
+			cur, curW = cont, contW
+		} else if curW > indentW {
+			cur += " "
+			curW++
+		}
+		cur += w
+		curW += wW
+	}
+	if !first {
+		out.WriteByte('\n')
+	}
+	out.WriteString(cur)
+	return out.String()
+}
+
+// splitAtWidth splits s at a rune boundary where the visible width first
+// reaches limit. Cuts prefer a path separator so long file paths wrap at
+// directory boundaries instead of mid-name.
+func splitAtWidth(s string, limit int) (string, string) {
+	if limit <= 0 {
+		return "", s
+	}
+	used := 0
+	cut := -1
+	for i, ch := range s {
+		cw := lipgloss.Width(string(ch))
+		if used+cw > limit {
+			cut = i
+			break
+		}
+		used += cw
+	}
+	if cut < 0 {
+		return s, ""
+	}
+	if j := strings.LastIndexByte(s[:cut], '/'); j >= 0 {
+		return s[:j+1], s[j+1:]
+	}
+	return s[:cut], s[cut:]
 }
 
 // maxDiffLines bounds how much of a very large patch we render, keeping the

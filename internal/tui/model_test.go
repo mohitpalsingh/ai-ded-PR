@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mohit/ai-ded-pr/internal/config"
 	"github.com/mohit/ai-ded-pr/internal/core/models"
 	"github.com/mohit/ai-ded-pr/internal/modelsvc"
@@ -134,6 +135,34 @@ func TestPaneRationaleHeadingLayout(t *testing.T) {
 	}
 }
 
+// Long lines must wrap instead of getting chopped by the viewport, and every
+// word must survive the wrap in order (including hard-split long tokens).
+func TestWrapTextKeepsAllContent(t *testing.T) {
+	long := "Verify: Ensure that the NewDatabricksOperator function correctly initializes both the conn and failureAlert fields with the provided values"
+	got := wrapText(""+long+"\n\n- Risk: short", 40)
+	for _, ln := range strings.Split(got, "\n") {
+		if lipgloss.Width(ln) > 40 {
+			t.Fatalf("line wider than 40: %q", ln)
+		}
+	}
+	gotWords := strings.Join(strings.Fields(got), " ")
+	wantWords := strings.Join(strings.Fields(long+" - Risk: short"), " ")
+	if gotWords != wantWords {
+		t.Fatalf("word wrap lost content:\n got: %s\nwant: %s", gotWords, wantWords)
+	}
+
+	token := strings.Repeat("abcdefghij", 10) // 100-char single word
+	got = wrapText(token, 40)
+	for _, ln := range strings.Split(got, "\n") {
+		if lipgloss.Width(ln) > 40 {
+			t.Fatalf("hard-split line wider than 40: %q", ln)
+		}
+	}
+	if j := strings.Join(strings.Fields(got), ""); j != token {
+		t.Fatalf("hard split lost content: %q", j)
+	}
+}
+
 // The review pane shows jumpable dependencies with their hotkeys.
 func TestDiffPaneShowsDependencyLinks(t *testing.T) {
 	m := New(config.Default(), true)
@@ -149,6 +178,40 @@ func TestDiffPaneShowsDependencyLinks(t *testing.T) {
 	m.setDiffContent()
 	if !strings.Contains(m.viewport.View(), "Deps: [1] svc.go") {
 		t.Fatalf("dependency line missing from pane:\n%s", m.viewport.View())
+	}
+}
+
+// Long dependency lines (three paths + hint) must wrap inside the pane instead
+// of being chopped mid-way, and every line must fit the pane width.
+func TestDiffPaneWrapsLongDependencyLine(t *testing.T) {
+	m := New(config.Default(), true)
+	m.screen = screenReview
+	m.viewport.Width = 50
+	m.viewport.Height = 40
+	const file = "internal/core/operator/databricks/databricks_operator.go"
+	deps := []string{
+		"internal/core/operator/databricks/failure_alert.go",
+		"internal/core/operator/operator.go",
+		"internal/core/operator/databricks/parameters.go",
+	}
+	m.pr = &models.PullRequest{Files: []models.ChangedFile{{Path: file, Additions: 37, Deletions: 4}}}
+	m.plan = &models.ReviewPlan{Steps: []models.ReviewStep{{
+		Path: file, Order: 1, Status: models.StatusPending,
+		Rationale: "- Intent: x\n- Dependencies: y\n- Verify: z\n- Risk: w",
+		DependsOn: deps,
+	}}}
+	m.current = 0
+	m.setDiffContent()
+	v := m.viewport.View()
+	for _, ln := range strings.Split(v, "\n") {
+		if w := lipgloss.Width(strings.TrimRight(ln, " ")); w > 50 {
+			t.Fatalf("pane line wider than 50 (%d): %q", w, ln)
+		}
+	}
+	for _, want := range []string{"failure_alert.go", "parameters.go", "1-3 jump", "b return)"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("wrapped Deps line lost %q:\n%s", want, v)
+		}
 	}
 }
 

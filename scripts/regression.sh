@@ -10,6 +10,10 @@
 #   7. ask subcommand + clean shutdown (no stray processes, ports free)
 #
 # Usage: scripts/regression.sh [repo-path]
+#
+# NOTE: this suite kills llama-server between steps and uses the same ports as
+# a live TUI (18973/18974/18993/18994). It refuses to start while an ai-ded-pr
+# session is already running, so close any open session first.
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +22,15 @@ TARGET_REPO="${1:-$REAL_HOME/Documents/workspace/ap-comms-dds}"
 BIN="/tmp/ai-ded-pr-regression"
 DEFAULT_MODEL="$REAL_HOME/.cache/ai-pr-review/models/gemma-3-4b-it-Q4_K_M.gguf"
 FALLBACK_MODEL="${AI_DED_PR_TEST_MODEL:-/tmp/gemma1b.gguf}"
+
+# Never trample a live session: the suite kills llama-server between steps and
+# reuses the model ports, which would strand an open TUI (and its in-flight
+# server would show up as false "residue" at the end).
+if pgrep -x llama-server >/dev/null 2>&1 || pgrep -f "ai-ded-pr" >/dev/null 2>&1; then
+  echo "refusing to run: an ai-ded-pr session (or llama-server) is already running."
+  echo "close it first — this suite kills llama-server and reuses ports 18973/18974/18993/18994."
+  exit 2
+fi
 
 pass=0
 fail=0
