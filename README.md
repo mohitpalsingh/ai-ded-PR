@@ -11,7 +11,7 @@
 On-device. No accounts. Nothing ever leaves your machine.
 
 ```text
-  ai-ded-pr v1.1.2  guided code review with local Gemma
+  ai-ded-pr v1.1.3  guided code review with local Gemma
   ┌─────────────────────────────┬──────────────────────────────────────────────┐
   │ ✓ 1 TokenService.java       │ • TokenService.java  (+12/-3)                │
   │ → 2 TokenServiceTest.java   │                                              │
@@ -29,7 +29,7 @@ opens only when the plan (order + rationales) is ready, so files never
 reshuffle under you:
 
 ```text
-  ai-ded-pr v1.1.2  guided code review with local Gemma
+  ai-ded-pr v1.1.3  guided code review with local Gemma
 
   ⠋ planning review — ordering files & writing rationales
 
@@ -129,4 +129,4 @@ make regression   # full end-to-end suite against a real repo + real model
 
 ## Status
 
-v1.1.2 — MIT License
+v1.1.3 — MIT License

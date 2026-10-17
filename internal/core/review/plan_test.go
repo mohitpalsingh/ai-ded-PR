@@ -50,6 +50,57 @@ func TestFormatRationaleCanonicalizesModelVariants(t *testing.T) {
 	}
 }
 
+// Long AI bullets must be preserved in full: the old 160-char caps chopped
+// complete Verify sentences mid-way, and because a second canonicalization
+// pass stripped the "..." marker the loss was invisible in the UI.
+func TestCompleteBulletsSurviveCanonicalization(t *testing.T) {
+	longVerify := "Ensure that the monitorOne function correctly retrieves the OperatorParameters from the task history record and passes them to the NewDatabricksOperator constructor. Verify that the failureAlert is propagated correctly and that the OnFailure callback is invoked for both Error and CallbackFailed statuses."
+	raw := "- Intent: x\n- Dependencies: task_v3.go\n- Verify: " + longVerify + "\n- Risk: y"
+	f := &models.ChangedFile{Path: "internal/scheduler/task_v3.go"}
+	got := FormatRationale(raw, f)
+	assertCanonical(t, "long verify", got)
+	if !strings.Contains(got, "CallbackFailed statuses") {
+		t.Fatalf("verify bullet lost its tail:\n%s", got)
+	}
+	if strings.Contains(got, "...") {
+		t.Fatalf("unexpected truncation marker:\n%s", got)
+	}
+	if again := FormatRationale(got, f); again != got {
+		t.Fatalf("canonicalization not idempotent:\nfirst:  %q\nsecond: %q", got, again)
+	}
+}
+
+// The safety cap still guards against pathological output: it cuts at a word
+// boundary and leaves a "..." that survives re-canonicalization.
+func TestSafetyCapKeepsVisibleEllipsis(t *testing.T) {
+	raw := "- Intent: x\n- Dependencies: y\n- Verify: " + strings.Repeat("word ", 300) + "\n- Risk: z"
+	f := &models.ChangedFile{Path: "a.go"}
+	got := FormatRationale(raw, f)
+	vl := bulletLine(got, "- Verify: ")
+	if !strings.HasSuffix(vl, "...") {
+		t.Fatalf("safety-capped bullet must end with \"...\": %q", vl)
+	}
+	if body := strings.TrimSuffix(vl, "..."); !strings.HasSuffix(body, "word") {
+		t.Fatalf("cut must land on a word boundary: %q", vl)
+	}
+	if len(vl) > len("- Verify: ")+600+len("...") {
+		t.Fatalf("safety cap too loose: %d chars", len(vl))
+	}
+	again := FormatRationale(got, f)
+	if vl2 := bulletLine(again, "- Verify: "); !strings.HasSuffix(vl2, "...") {
+		t.Fatalf("ellipsis lost on re-canonicalization: %q", vl2)
+	}
+}
+
+func bulletLine(rationale, prefix string) string {
+	for _, ln := range strings.Split(rationale, "\n") {
+		if strings.HasPrefix(ln, prefix) {
+			return ln
+		}
+	}
+	return ""
+}
+
 func TestHeuristicPlanFormatsEveryFile(t *testing.T) {
 	pr := &models.PullRequest{Title: "t", Files: []models.ChangedFile{
 		{Path: "a.go", Status: "modified", Additions: 10, Deletions: 2},

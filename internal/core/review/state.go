@@ -48,7 +48,13 @@ func itoa(n int) string {
 	return s
 }
 
+// stateVersion 2: pre-v2 summaries could contain bullets silently clipped by
+// the old 160-char rationale cap (and the legacy Notes->Summaries alias served
+// that same era), so they are dropped once on load and regenerate cleanly.
+const stateVersion = 2
+
 type State struct {
+	Version   int               `json:"version,omitempty"`
 	Done      map[string]bool   `json:"done"`
 	Skipped   map[string]bool   `json:"skipped"`
 	Notes     map[string]string `json:"notes"`
@@ -62,11 +68,8 @@ func LoadState(pr *models.PullRequest) *State {
 		return st
 	}
 	json.Unmarshal(b, st)
-	if len(st.Summaries) == 0 && len(st.Notes) > 0 {
-		st.Summaries = map[string]string{}
-		for k, v := range st.Notes {
-			st.Summaries[k] = v
-		}
+	if st.Version < stateVersion {
+		st.Summaries = nil
 	}
 	if st.Done == nil {
 		st.Done = map[string]bool{}
@@ -81,6 +84,7 @@ func LoadState(pr *models.PullRequest) *State {
 }
 
 func SaveState(pr *models.PullRequest, st *State) {
+	st.Version = stateVersion
 	b, _ := json.MarshalIndent(st, "", "  ")
 	os.WriteFile(StatePath(pr), b, 0644)
 }

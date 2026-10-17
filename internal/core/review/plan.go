@@ -130,7 +130,14 @@ func flattenRationale(s string) string {
 func tidySection(s string) string {
 	s = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(s)
 	s = strings.Join(strings.Fields(s), " ")
-	return strings.Trim(s, " -:.,;")
+	truncated := strings.HasSuffix(s, "...")
+	s = strings.Trim(s, " -:.,;")
+	// Keep a truncation marker: re-canonicalizing an already-clipped bullet
+	// used to strip its "...", silently hiding that text had been dropped.
+	if truncated && s != "" {
+		s += "..."
+	}
+	return s
 }
 
 func appendPart(dst *string, s string) {
@@ -359,10 +366,13 @@ func buildRationale(p rationaleParts, f *models.ChangedFile) string {
 		p.risk = defaultRisk(f)
 	}
 	return strings.Join([]string{
-		"- Intent: " + clipWords(p.intent, 200),
-		"- Dependencies: " + clipWords(p.deps, 160),
-		"- Verify: " + clipWords(p.verify, 160),
-		"- Risk: " + clipWords(p.risk, 160),
+		// Caps are a safety net against pathological model output only; the
+		// old 160-char caps chopped complete sentences mid-way (and a second
+		// canonicalization pass stripped the "..." marker, hiding the loss).
+		"- Intent: " + clipWords(p.intent, 480),
+		"- Dependencies: " + clipWords(p.deps, 480),
+		"- Verify: " + clipWords(p.verify, 600),
+		"- Risk: " + clipWords(p.risk, 480),
 	}, "\n")
 }
 
