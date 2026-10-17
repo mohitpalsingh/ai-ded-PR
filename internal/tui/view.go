@@ -65,7 +65,24 @@ func (m *tuiModel) viewForm() string {
 }
 
 func (m *tuiModel) viewLoading() string {
-	return boxStyle.Render(m.spinner.View() + " " + m.loadingMsg + "\n")
+	var b strings.Builder
+	tag := "ai-ded-pr"
+	if m.version != "" && m.version != "dev" {
+		tag += " v" + m.version
+	}
+	b.WriteString(titleStyle.Render(tag) + "  guided code review with local Gemma\n\n")
+	b.WriteString(m.spinner.View() + " " + m.loadingMsg + "\n\n")
+	if m.pr != nil {
+		b.WriteString(statusStyle.Render(fmt.Sprintf("%d files changed, +%d/-%d", len(m.pr.Files), m.pr.TotalAdd, m.pr.TotalDel)) + "\n")
+	}
+	if m.downloading {
+		b.WriteString(fmt.Sprintf("downloading model: %.1f / %.1f MB\n", float64(m.dlDone)/1e6, float64(m.dlTotal)/1e6))
+	} else if m.status != "" {
+		b.WriteString(statusStyle.Render(m.status) + "\n")
+	}
+	b.WriteString("\nThe review opens when the plan (order + rationales) is ready.\n")
+	b.WriteString("q quit\n")
+	return boxStyle.Render(b.String())
 }
 
 func (m *tuiModel) viewReview() string {

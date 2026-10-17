@@ -88,6 +88,9 @@ func SaveState(pr *models.PullRequest, st *State) {
 // Apply restores statuses and persisted per-file summaries onto a plan so
 // summaries are generated once and never recalculated.
 func ApplyState(plan *models.ReviewPlan, st *State) {
+	if plan == nil || st == nil {
+		return
+	}
 	for i := range plan.Steps {
 		if st.Done[plan.Steps[i].Path] {
 			plan.Steps[i].Status = models.StatusDone

@@ -103,6 +103,7 @@ has /tmp/regr-tui.clean.txt "/ ask" && ok "ask footer (not search)" || bad "ask 
 has /tmp/regr-tui.clean.txt "ask changed files" && ok "ask help text" || bad "ask help text missing"
 has /tmp/regr-tui.clean.txt "jump to a changed dependency" && ok "dep jump help" || bad "dep jump help missing"
 has /tmp/regr-tui.clean.txt "return after a dependency jump" && ok "dep back help" || bad "dep back help missing"
+has /tmp/regr-tui.clean.txt "The review opens when the plan" && ok "loading screen shown while planning" || bad "loading screen never shown"
 check "no loading stalls"     "0" "$(grep -c '(loading...)' /tmp/regr-tui.clean.txt || true)"
 has /tmp/regr-tui.clean.txt "progress: 0/$FILES" && ok "progress line" || bad "progress line missing"
 

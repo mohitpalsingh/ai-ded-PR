@@ -230,6 +230,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(v)
 
 	case spinner.TickMsg:
+		// Animate only while the loading screen is up; leaving it lets the
+		// tick loop drain, so no timer keeps firing for the app's lifetime.
+		if m.screen != screenLoading {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(v)
 		return m, cmd
@@ -241,6 +246,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.pr = v.pr
+		m.plan = nil // a plan from an earlier source must never leak through
 		m.state = review.LoadState(v.pr)
 		m.depStack = nil
 		if m.state.Summaries != nil {
@@ -263,9 +269,20 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.summary[path] = review.FormatRationale(raw, cf)
 			}
 		}
-		m.loadingMsg = "planning review order..."
-		m.screen = screenLoading
-		return m, tea.Batch(m.spinner.Tick, m.planCmd())
+		// The review screen opens only once the plan is ready. While the model
+		// warms up (or downloads) we stay on the loading screen — the user
+		// never sees an unordered, placeholder review reshuffle under them.
+		switch {
+		case m.downloading:
+			return m, m.beginLoading("downloading local model (one-time, ~2.5 GB)")
+		case m.noAI || m.client != nil:
+			return m, tea.Batch(
+				m.beginLoading("planning review — ordering files & writing rationales"),
+				m.planCmd(),
+			)
+		default:
+			return m, m.beginLoading("starting local Gemma (Metal)")
+		}
 
 	case planReadyMsg:
 		if v.err != nil {
@@ -348,12 +365,20 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.planner.Client = m.client
 			}
 			m.status = "model ready"
-			// If PR already loaded, upgrade heuristic plan with AI + summaries.
-			if m.pr != nil && m.plan != nil {
+			// The source is loaded but the plan isn't: plan now, stay on the
+			// loading screen until planReadyMsg opens the review.
+			if m.pr != nil && m.plan == nil && m.screen == screenLoading {
+				m.loadingMsg = "planning review — ordering files & writing rationales"
 				return m, m.planCmd()
 			}
 		} else {
 			m.status = "model unavailable: " + v.err.Error()
+			// Never strand the user on the loading screen: fall back to the
+			// heuristic plan (no model) so the review still opens.
+			if m.pr != nil && m.plan == nil && m.screen == screenLoading {
+				m.loadingMsg = "model unavailable — using heuristic review order"
+				return m, m.planCmd()
+			}
 		}
 		return m, nil
 
@@ -371,6 +396,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.downloading = false
 		if v.err != nil {
 			m.status = "download failed: " + v.err.Error()
+			// Unblock a waiting review with the heuristic plan.
+			if m.pr != nil && m.plan == nil && m.screen == screenLoading {
+				m.loadingMsg = "model download failed — using heuristic review order"
+				return m, m.planCmd()
+			}
 			return m, nil
 		}
 		m.status = "model downloaded; starting..."
@@ -497,13 +527,14 @@ func (m *tuiModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "r":
 			if m.pr != nil {
-				m.loadingMsg = "replanning..."
-				m.screen = screenLoading
 				if m.planner == nil {
 					m.planner = review.NewPlanner(m.client, m.embedClient)
 				}
 				m.planner.Client = m.client
-				return m, m.planCmd()
+				return m, tea.Batch(
+					m.beginLoading("replanning — ordering files & writing rationales"),
+					m.planCmd(),
+				)
 			}
 		case "g":
 			m.screen = screenWelcome
@@ -678,6 +709,16 @@ func (m *tuiModel) Shutdown() {
 }
 func (m *tuiModel) SetProgram(p *tea.Program) { m.program = p }
 
+// beginLoading switches to the loading screen and returns a spinner tick so
+// the indicator animates. Every long operation (model start, planning,
+// replanning) funnels through here; the review screen is entered only when
+// the plan is ready, never with placeholder content.
+func (m *tuiModel) beginLoading(msg string) tea.Cmd {
+	m.loadingMsg = msg
+	m.screen = screenLoading
+	return m.spinner.Tick
+}
+
 func (m *tuiModel) stepPath(i int) string {
 	if m.plan == nil || i >= len(m.plan.Steps) || i < 0 {
 		return ""
@@ -699,14 +740,20 @@ func (m *tuiModel) setDiffContent() {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %s  (+%d/-%d)\n", statusIcon(m.plan.Steps[m.current].Status), path, safeAdd(cf), safeDel(cf))
-	// One canonical block per file: the summary (persisted when available,
-	// otherwise the plan's rationale) is rendered exactly once.
+	fmt.Fprintf(&b, "%s  %s  (+%d/-%d)\n\n", statusIcon(m.plan.Steps[m.current].Status), path, safeAdd(cf), safeDel(cf))
+	// One canonical block per file: heading, then the summary (persisted when
+	// available, otherwise the plan's rationale) rendered exactly once.
 	summary := m.summary[path]
 	if summary == "" {
 		summary = m.plan.Steps[m.current].Rationale
 	}
-	fmt.Fprintf(&b, "Rationale: %s\n", summary)
+	b.WriteString("Rationale:\n")
+	if summary != "" {
+		b.WriteString(summary + "\n")
+	}
+	if len(m.plan.Steps[m.current].Focus) > 0 || len(m.plan.Steps[m.current].DependsOn) > 0 {
+		b.WriteString("\n")
+	}
 	if len(m.plan.Steps[m.current].Focus) > 0 {
 		fmt.Fprintf(&b, "Focus: %s\n", strings.Join(m.plan.Steps[m.current].Focus, "; "))
 	}

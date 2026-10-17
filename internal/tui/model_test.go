@@ -1,13 +1,17 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mohit/ai-ded-pr/internal/config"
 	"github.com/mohit/ai-ded-pr/internal/core/models"
+	"github.com/mohit/ai-ded-pr/internal/modelsvc"
 )
+
+var errNotHealthy = errors.New("model server not healthy")
 
 func keyMsg(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
@@ -49,6 +53,84 @@ func TestDependencyJumpAndBack(t *testing.T) {
 	}
 	if len(m.depStack) != 0 {
 		t.Fatalf("depStack should be empty, got %v", m.depStack)
+	}
+}
+
+// The review screen must not open before the plan is ready: while the model
+// is starting we stay on the loading screen, and only planReadyMsg opens it.
+func TestReviewOpensOnlyWhenPlanReady(t *testing.T) {
+	m := New(config.Default(), false)
+	m.pr = &models.PullRequest{Files: []models.ChangedFile{{Path: "a.go", Additions: 2, Deletions: 1}}}
+	if cmd := m.beginLoading("starting local Gemma (Metal)"); cmd == nil {
+		t.Fatal("beginLoading should return a spinner tick")
+	}
+	if m.screen != screenLoading {
+		t.Fatalf("screen = %v, want screenLoading", m.screen)
+	}
+
+	// The model becomes ready: planning kicks off, review must stay closed.
+	_, cmd := m.Update(serverReadyMsg{client: modelsvc.NewClient("http://127.0.0.1:1")})
+	if cmd == nil {
+		t.Fatal("expected a plan command once the model is ready")
+	}
+	if m.screen != screenLoading {
+		t.Fatalf("review opened before the plan was ready (screen=%v)", m.screen)
+	}
+
+	// The plan arrives: now the review opens, with content already in place.
+	plan := &models.ReviewPlan{Steps: []models.ReviewStep{{
+		Path: "a.go", Order: 1, Status: models.StatusPending,
+		Rationale: "- Intent: x\n- Dependencies: y\n- Verify: z\n- Risk: w",
+	}}}
+	_, _ = m.Update(planReadyMsg{plan: plan})
+	if m.screen != screenReview {
+		t.Fatalf("review did not open on planReadyMsg (screen=%v)", m.screen)
+	}
+}
+
+// A failed model startup must never strand the user on the loading screen:
+// the heuristic plan is used and the review opens.
+func TestModelUnavailableStillOpensReview(t *testing.T) {
+	m := New(config.Default(), false)
+	m.pr = &models.PullRequest{Files: []models.ChangedFile{{Path: "a.go", Additions: 2, Deletions: 1}}}
+	m.beginLoading("starting local Gemma (Metal)")
+
+	_, cmd := m.Update(serverReadyMsg{err: errNotHealthy})
+	if cmd == nil {
+		t.Fatal("expected a fallback plan command when the model is unavailable")
+	}
+	msg := cmd() // heuristic plan runs offline
+	_, _ = m.Update(msg)
+	if m.screen != screenReview {
+		t.Fatalf("review did not open after fallback (screen=%v)", m.screen)
+	}
+	if m.plan == nil || len(m.plan.Steps) != 1 {
+		t.Fatalf("fallback plan = %+v, want 1 step", m.plan)
+	}
+}
+
+// The pane layout: file line, blank line, "Rationale:" heading on its own
+// line, then the four bullets.
+func TestPaneRationaleHeadingLayout(t *testing.T) {
+	m := New(config.Default(), true)
+	m.screen = screenReview
+	m.viewport.Width = 120
+	m.viewport.Height = 40
+	m.pr = &models.PullRequest{Files: []models.ChangedFile{{Path: "a.go", Additions: 3, Deletions: 1}}}
+	m.plan = &models.ReviewPlan{Steps: []models.ReviewStep{{
+		Path: "a.go", Order: 1, Status: models.StatusPending,
+		Rationale: "- Intent: Gets a key\n- Dependencies: none\n- Verify: run it\n- Risk: nil (low)",
+	}}}
+	m.current = 0
+	m.setDiffContent()
+	v := m.viewport.View()
+	lines := strings.Split(v, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	v = strings.Join(lines, "\n")
+	if !strings.Contains(v, "(+3/-1)\n\nRationale:\n- Intent: Gets a key") {
+		t.Fatalf("pane layout wrong:\n%s", v)
 	}
 }
 
