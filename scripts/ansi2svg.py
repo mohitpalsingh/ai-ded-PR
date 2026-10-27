@@ -3,8 +3,17 @@
 
 Usage:
     tmux capture-pane -p -e > /tmp/review.ansi
-    python3 scripts/ansi2svg.py /tmp/review.ansi docs/screenshots/review.svg \
+    python3 scripts/ansi2svg.py /tmp/review.ansi /tmp/review.svg \
         --title "ai-ded-pr · internal/auth/token.go"
+
+GitHub's markdown renderer rejects SVG images in READMEs, so rasterize the
+result to PNG at 2x before committing it under docs/screenshots/:
+
+    <chrome> --headless --disable-gpu --hide-scrollbars \
+        --force-device-scale-factor=2 --window-size=W,H \
+        --screenshot=docs/screenshots/review.png page.html
+
+where page.html embeds the SVG at its intrinsic W,H on a matching background.
 
 Requires only Python 3 (no third-party packages). The SVG is self-contained:
 inline colors, monospace font, rounded terminal window.
