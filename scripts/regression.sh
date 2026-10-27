@@ -12,7 +12,7 @@
 #      keeps the diff pane on screen and scrolls to the last diff line
 #   8. clean shutdown (no stray processes, ports free)
 #
-# Usage: scripts/regression.sh [repo-path]
+# Usage: scripts/regression.sh [repo-path]   (default: a generated 4-file fixture)
 #
 # NOTE: this suite kills llama-server between steps and uses the same ports as
 # a live TUI (18973/18974/18993/18994). It refuses to start while an ai-ded-pr
@@ -21,7 +21,7 @@ set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REAL_HOME="$HOME"
-TARGET_REPO="${1:-$REAL_HOME/Documents/workspace/ap-comms-dds}"
+TARGET_REPO="${1:-$ROOT_DIR/testdata/regression-repo}"
 BIN="/tmp/ai-ded-pr-regression"
 DEFAULT_MODEL="$REAL_HOME/.cache/ai-pr-review/models/gemma-3-4b-it-Q4_K_M.gguf"
 FALLBACK_MODEL="${AI_DED_PR_TEST_MODEL:-/tmp/gemma1b.gguf}"
@@ -67,6 +67,11 @@ V="$("$BIN" --version 2>/dev/null)"
 case "$V" in ai-ded-pr*) ok "version flag ($V)";; *) bad "version flag broken ($V)";; esac
 
 echo "== 1. repo =="
+if [ -z "${1:-}" ]; then
+  # Self-contained default: a small, realistic 4-file change with two commits.
+  "$ROOT_DIR/scripts/make-regression-fixture.sh" "$TARGET_REPO" > /tmp/regr-fixture-small.txt 2>&1 \
+    || { cat /tmp/regr-fixture-small.txt; exit 1; }
+fi
 if ! git -C "$TARGET_REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "not a git repo: $TARGET_REPO"; exit 1
 fi
@@ -176,7 +181,8 @@ AFTER="$(shasum "$STATEFILE" 2>/dev/null | awk '{print $1}')"
 check "state unchanged by --no-ai run" "$BEFORE" "$AFTER"
 
 echo "== 6. ask subcommand =="
-"$BIN" ask "graphql rendering" --repo "$REPO_ABS" --base HEAD~1 --head HEAD ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} > /tmp/regr-ask.txt 2>&1
+ASK_QUERY="${AI_DED_PR_TEST_QUERY:-token}"
+"$BIN" ask "$ASK_QUERY" --repo "$REPO_ABS" --base HEAD~1 --head HEAD ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} > /tmp/regr-ask.txt 2>&1
 ASK_RC=$?
 check "ask exits 0" "0" "$ASK_RC"
 [ "$(grep -c 'Relevant files' /tmp/regr-ask.txt)" -ge 1 ] && ok "ask returns relevant files" || bad "ask returned no results"

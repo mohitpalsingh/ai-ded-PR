@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mohit/ai-ded-pr/internal/core/models"
-	"github.com/mohit/ai-ded-pr/internal/modelsvc"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/modelsvc"
 )
 
 type Planner struct {
@@ -285,7 +285,7 @@ func isTestFile(p string) bool {
 }
 
 // coversTest reports whether testPath is a test file for the code file depPath
-// (e.g. ".../ApolloConfigServiceTest.java" covers ".../ApolloConfigService.java").
+// (e.g. ".../OrderServiceTest.java" covers ".../OrderService.java").
 func coversTest(testPath, depPath string) bool {
 	if !isTestFile(testPath) {
 		return false
@@ -941,8 +941,8 @@ func lookupFile(byPath map[string]*models.ChangedFile, p string) *models.Changed
 		return found
 	}
 	// Models often name dependencies by class or FQN instead of path:
-	// "com.a.b.ApolloConfigService", "com.a.b.ApolloConfigService.java" or
-	// bare "ApolloConfigService". Match these against extension-stripped
+	// "com.a.b.OrderService", "com.a.b.OrderService.java" or
+	// bare "OrderService". Match these against extension-stripped
 	// path suffixes.
 	if !strings.Contains(q, "/") {
 		cand := q
@@ -983,7 +983,7 @@ func knownCodeExt(ext string) bool {
 }
 
 // codeStem returns the symbol name a code filename stands for (e.g.
-// "ApolloConfigService" for ".../ApolloConfigService.java").
+// "OrderService" for ".../OrderService.java").
 func codeStem(p string) (string, bool) {
 	base := p
 	if i := strings.LastIndexByte(base, '/'); i >= 0 {
@@ -1054,8 +1054,8 @@ func diffContentLines(patch string) string {
 }
 
 // containsWord reports whether text contains word delimited by non-identifier
-// bytes, so "ApolloConfigService" does not match inside
-// "ApolloConfigServiceHelper".
+// bytes, so "OrderService" does not match inside
+// "OrderServiceHelper".
 func containsWord(text, word string) bool {
 	if word == "" {
 		return false

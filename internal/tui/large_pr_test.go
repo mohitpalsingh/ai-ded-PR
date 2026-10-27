@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mohit/ai-ded-pr/internal/config"
-	"github.com/mohit/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/config"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
 )
 
 // bigPatch builds a one-file patch with adds removed lines and adds added

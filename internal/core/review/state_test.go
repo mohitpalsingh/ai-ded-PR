@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mohit/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
 )
 
 func TestStatePathUniquePerRepoAndDiff(t *testing.T) {

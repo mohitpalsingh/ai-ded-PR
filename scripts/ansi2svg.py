@@ -6,8 +6,10 @@ Usage:
     python3 scripts/ansi2svg.py /tmp/review.ansi /tmp/review.svg \
         --title "ai-ded-pr · internal/auth/token.go"
 
-GitHub's markdown renderer rejects SVG images in READMEs, so rasterize the
-result to PNG at 2x before committing it under docs/screenshots/:
+GitHub serves repo-local README images from raw.githubusercontent.com, which
+some corporate networks sinkhole. Rasterize the result to PNG at 2x; this
+repo points the README at the jsDelivr mirror of the PNG, which GitHub proxies
+through camo:
 
     <chrome> --headless --disable-gpu --hide-scrollbars \
         --force-device-scale-factor=2 --window-size=W,H \

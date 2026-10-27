@@ -3,7 +3,7 @@ package hosts
 import (
 	"context"
 
-	"github.com/mohit/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
 )
 
 // Ref identifies a PR on a host.

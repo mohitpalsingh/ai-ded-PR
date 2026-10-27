@@ -3,3 +3,6 @@ build/
 *.part
 .DS_Store
 testdata/large-pr-repo/
+testdata/regression-repo/
+__pycache__/
+*.pyc

@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mohit/ai-ded-pr/internal/config"
-	"github.com/mohit/ai-ded-pr/internal/core/models"
-	"github.com/mohit/ai-ded-pr/internal/core/review"
-	"github.com/mohit/ai-ded-pr/internal/hosts/localgit"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/config"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/review"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/hosts/localgit"
 )
 
 // TestLargePRFixtureRepo is the end-to-end regression for the reported case:

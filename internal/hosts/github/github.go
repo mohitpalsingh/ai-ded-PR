@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mohit/ai-ded-pr/internal/core/diff"
-	"github.com/mohit/ai-ded-pr/internal/core/models"
-	"github.com/mohit/ai-ded-pr/internal/hosts"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/diff"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/hosts"
 )
 
 type Client struct {

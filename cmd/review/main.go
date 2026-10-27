@@ -11,13 +11,13 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mohit/ai-ded-pr/internal/config"
-	"github.com/mohit/ai-ded-pr/internal/core/models"
-	"github.com/mohit/ai-ded-pr/internal/core/review"
-	"github.com/mohit/ai-ded-pr/internal/hosts/github"
-	"github.com/mohit/ai-ded-pr/internal/hosts/localgit"
-	"github.com/mohit/ai-ded-pr/internal/modelsvc"
-	"github.com/mohit/ai-ded-pr/internal/tui"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/config"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/review"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/hosts/github"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/hosts/localgit"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/modelsvc"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/tui"
 )
 
 // version is stamped via -ldflags "-X main.version=..." (see Makefile).

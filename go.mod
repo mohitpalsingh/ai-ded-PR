@@ -1,4 +1,4 @@
-module github.com/mohit/ai-ded-pr
+module github.com/mohitpalsingh/ai-ded-pr
 
 go 1.27.2
 

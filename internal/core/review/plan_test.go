@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mohit/ai-ded-pr/internal/core/models"
-	"github.com/mohit/ai-ded-pr/internal/modelsvc"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/modelsvc"
 )
 
 var canonicalPrefixes = []string{"- Intent: ", "- Dependencies: ", "- Verify: ", "- Risk: "}
@@ -331,8 +331,8 @@ func TestPlanOrdersDependenciesFirst(t *testing.T) {
 // Even when the model emits no depends_on at all, symbol references in the
 // diffs must produce jump edges and force dependencies to be reviewed first.
 func TestPlanInfersDepsFromDiffSymbols(t *testing.T) {
-	const svc = "src/main/java/com/x/ApolloConfigService.java"
-	const test = "src/test/java/com/x/ApolloConfigServiceTest.java"
+	const svc = "src/main/java/com/x/OrderService.java"
+	const test = "src/test/java/com/x/OrderServiceTest.java"
 	raw := `{"summary":"s","steps":[` +
 		`{"path":"` + test + `","rationale":"- Intent: covers the new lookup path\n- Dependencies: none\n- Verify: run the test\n- Risk: flaky assertion (low)","risk":"low"},` +
 		`{"path":"` + svc + `","rationale":"- Intent: adds a TTL lookup\n- Dependencies: none\n- Verify: TTL expiry\n- Risk: stale reads (medium)","risk":"medium"}` +
@@ -345,7 +345,7 @@ func TestPlanInfersDepsFromDiffSymbols(t *testing.T) {
 
 	pr := &models.PullRequest{Title: "t", Files: []models.ChangedFile{
 		{Path: svc, Status: "modified", Additions: 6, Patch: "@@ -10,3 +10,5 @@\n     private final Map<String, String> cache;\n+    String get(String key) { return cache.get(key); }\n"},
-		{Path: test, Status: "modified", Additions: 4, Patch: "@@ -5,2 +5,4 @@\n+        ApolloConfigService svc = new ApolloConfigService();\n+        assertEquals(\"v\", svc.get(\"k\"));\n"},
+		{Path: test, Status: "modified", Additions: 4, Patch: "@@ -5,2 +5,4 @@\n+        OrderService svc = new OrderService();\n+        assertEquals(\"v\", svc.get(\"k\"));\n"},
 	}}
 	plan, err := NewPlanner(modelsvc.NewClient(srv.URL), nil).Plan(context.Background(), pr)
 	if err != nil {
@@ -364,7 +364,7 @@ func TestPlanInfersDepsFromDiffSymbols(t *testing.T) {
 	}
 	// The service is load-bearing for the test: its Dependencies bullet must
 	// say so concretely (reverse-dep annotation replaced the filler).
-	if !strings.Contains(plan.Steps[pos[svc]].Rationale, "ApolloConfigServiceTest.java") {
+	if !strings.Contains(plan.Steps[pos[svc]].Rationale, "OrderServiceTest.java") {
 		t.Fatalf("reverse-dep note missing: %q", plan.Steps[pos[svc]].Rationale)
 	}
 }
@@ -373,22 +373,22 @@ func TestPlanInfersDepsFromDiffSymbols(t *testing.T) {
 // the changed file path (and only that file).
 func TestLookupFileAcceptsFQN(t *testing.T) {
 	byPath := map[string]*models.ChangedFile{
-		"ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/impl/ApolloConfigService.java":       {Path: "ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/impl/ApolloConfigService.java"},
-		"ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/handler/CommsCollectionHandler.java": {Path: "ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/handler/CommsCollectionHandler.java"},
+		"order-service/src/main/java/com/acme/orders/service/impl/OrderService.java":         {Path: "order-service/src/main/java/com/acme/orders/service/impl/OrderService.java"},
+		"order-service/src/main/java/com/acme/orders/service/handler/OrderEventHandler.java": {Path: "order-service/src/main/java/com/acme/orders/service/handler/OrderEventHandler.java"},
 	}
 	for _, q := range []string{
-		"com.hotstar.ap.comms.service.impl.ApolloConfigService",
-		"com.hotstar.ap.comms.service.impl.ApolloConfigService.java",
-		"ApolloConfigService",
-		"impl/ApolloConfigService.java",
-		"./ap-comms-dds-server/src/main/java/com/hotstar/ap/comms/service/impl/ApolloConfigService.java",
+		"com.acme.orders.service.impl.OrderService",
+		"com.acme.orders.service.impl.OrderService.java",
+		"OrderService",
+		"impl/OrderService.java",
+		"./order-service/src/main/java/com/acme/orders/service/impl/OrderService.java",
 	} {
 		f := lookupFile(byPath, q)
-		if f == nil || !strings.HasSuffix(f.Path, "ApolloConfigService.java") {
-			t.Fatalf("lookupFile(%q) = %+v, want ApolloConfigService.java", q, f)
+		if f == nil || !strings.HasSuffix(f.Path, "OrderService.java") {
+			t.Fatalf("lookupFile(%q) = %+v, want OrderService.java", q, f)
 		}
 	}
-	if f := lookupFile(byPath, "com.hotstar.ap.comms.service.impl.GhostService"); f != nil {
+	if f := lookupFile(byPath, "com.acme.orders.service.impl.MissingService"); f != nil {
 		t.Fatalf("lookupFile(ghost) = %+v, want nil", f)
 	}
 }

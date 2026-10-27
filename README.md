@@ -25,8 +25,8 @@ not how a change works — and it's why a 1k-LOC PR takes an afternoon.
   before line one. No more opening 14 files to figure out where to start.
 - **Jump to what matters.** Dependencies between changed files are read from the diff, not
   guessed. `1`–`9` jumps to a changed dependency, `b` brings you back.
-- **One model call per PR.** The whole plan (order + rationales) comes from a single local
-  pass, then it's persisted. Swapping files is instant; nothing regenerates behind your back.
+- **One pass per PR.** The order and rationales come from a single local model run, then
+  they're persisted. Swapping files is instant; nothing regenerates behind your back.
 - **Local and boring.** Gemma 3 4B Q4_K_M, ~2.5 GB download, ~2 GB resident, buttery smooth
   on a 16 GB M-series Mac. `llama-server` starts with the TUI and dies with it.
 
@@ -78,7 +78,7 @@ continues where it stopped.
 ```bash
 ai-ded-pr                                  # review current repo changes
 ai-ded-pr diff                             # same, explicit
-ai-ded-pr branch-diff feature/AUD-13533-CMS-table-migration master
+ai-ded-pr branch-diff feature/checkout-retry master
 ai-ded-pr ask "where is auth handled?"     # find the files that matter
 ```
 
@@ -107,7 +107,7 @@ ai-ded-pr --github https://github.com/owner/repo/pull/123
 | `q` | quit |
 
 Every file gets the same four bullets — **Intent / Dependencies / Verify / Risk** —
-generated once, persisted, never recalculated.
+generated once and persisted, so switching files stays instant.
 
 ## 🧩 How it works
 
@@ -124,7 +124,7 @@ generated once, persisted, never recalculated.
   q / Ctrl+C ──► server killed, ports released, zero residue
 ```
 
-The plan is one model call. Everything after that — file switching, dependency jumps,
+The plan is one local model pass. Everything after that — file switching, dependency jumps,
 done/skip, scrolling — is local and instant.
 
 ## 💾 Footprint
@@ -155,8 +155,11 @@ Bitbucket or Azure DevOps. PRs welcome.
 ```bash
 make build        # binary in build/
 make test         # go test + vet
-make regression   # end-to-end: real repo, real model, large-PR fixture
+make regression   # end-to-end: real model, generated fixtures (no external repo)
 ```
+
+Pass a repo path to run the suite against your own checkout:
+`scripts/regression.sh ~/code/app`.
 
 Large-PR fixture, for manual TUI testing:
 
@@ -169,8 +172,10 @@ Screenshots are real captures of the TUI: `scripts/ansi2svg.py` turns a
 `tmux capture-pane -e` capture into SVG, then it is rasterized to PNG at 2x.
 The local copies live in `docs/screenshots/`; the README points at the jsDelivr
 mirror pinned to the v1.1.5 tag, because GitHub serves repo-local images from
-`raw.githubusercontent.com`, which some corporate networks sinkhole.
+`raw.githubusercontent.com`, which some corporate networks sinkhole. Captures
+come from the generated fixtures (`scripts/make-large-pr-fixture.sh` and
+`scripts/make-regression-fixture.sh`).
 
 ## Status
 
-v1.1.6 — MIT License
+v1.1.7 — MIT License

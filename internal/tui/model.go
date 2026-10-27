@@ -13,12 +13,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mohit/ai-ded-pr/internal/config"
-	"github.com/mohit/ai-ded-pr/internal/core/models"
-	"github.com/mohit/ai-ded-pr/internal/core/review"
-	"github.com/mohit/ai-ded-pr/internal/hosts/github"
-	"github.com/mohit/ai-ded-pr/internal/hosts/localgit"
-	"github.com/mohit/ai-ded-pr/internal/modelsvc"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/config"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/models"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/core/review"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/hosts/github"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/hosts/localgit"
+	"github.com/mohitpalsingh/ai-ded-pr/internal/modelsvc"
 )
 
 type screen int
@@ -60,7 +60,6 @@ type tuiModel struct {
 	planner *review.Planner
 
 	current  int
-	listOff  int
 	depStack []int
 	summary  map[string]string
 	// shownPath is the file currently rendered in the diff pane; it lets
@@ -71,7 +70,6 @@ type tuiModel struct {
 	status     string
 
 	queryResults []string
-	queryIdx     int
 
 	version string
 
@@ -727,13 +725,6 @@ func (m *tuiModel) beginLoading(msg string) tea.Cmd {
 	m.loadingMsg = msg
 	m.screen = screenLoading
 	return m.spinner.Tick
-}
-
-func (m *tuiModel) stepPath(i int) string {
-	if m.plan == nil || i >= len(m.plan.Steps) || i < 0 {
-		return ""
-	}
-	return m.plan.Steps[i].Path
 }
 
 func (m *tuiModel) setDiffContent() {
