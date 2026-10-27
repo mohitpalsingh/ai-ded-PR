@@ -89,47 +89,178 @@ func (m *tuiModel) viewReview() string {
 	if m.pr == nil {
 		return "no PR"
 	}
-	leftWidth, rightWidth := m.paneWidths()
 	if m.height < 12 {
 		m.height = 24
 	}
-	// left list
-	var left strings.Builder
-	left.WriteString(titleStyle.Render(fmt.Sprintf("%s#%d", m.pr.Repo, m.pr.Number)) + "\n")
-	left.WriteString(statusStyle.Render(trunc(m.pr.Title, 36)) + "\n\n")
+
+	var helpBox string
+	if m.help {
+		helpBox = boxStyle.Render(helpText())
+		if m.width > 0 && lipgloss.Width(helpBox) > m.width {
+			// Terminal narrower than the help box: drop the border and clip.
+			helpBox = truncBlock(helpText(), m.width)
+		}
+		// panes (min 8 rows) + status bar + help box
+		if strings.Count(helpBox, "\n")+1+9 > m.height {
+			return helpBox // terminal too small for panes + help
+		}
+	}
+
+	// The panes plus the status bar must never exceed the terminal, otherwise
+	// the renderer scrolls the whole view and the diff pane disappears (the
+	// bug that made big PRs look unscrollable).
+	paneH := m.height - 1 // one line for the status bar
+	if helpBox != "" {
+		paneH -= strings.Count(helpBox, "\n") + 1
+	}
+	if paneH < 8 {
+		paneH = 8
+	}
+	leftWidth, rightWidth := m.paneWidths()
+
+	// left: a windowed file list that always keeps the current file visible
+	left := m.renderSidebar(leftWidth, paneH)
+
+	// right: diff viewport fills the pane instead of leaving rows unused
+	m.viewport.Width = rightWidth
+	m.viewport.Height = paneH
+	right := m.viewport.View()
+
+	// layout
+	leftBox := lipgloss.NewStyle().Width(leftWidth).Height(paneH).Render(left)
+	rightBox := lipgloss.NewStyle().Width(rightWidth).Height(paneH).Render(right)
+	gutter := lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render(
+		strings.TrimSuffix(strings.Repeat(" │ \n", paneH), "\n"))
+	main := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, gutter, rightBox)
+
+	out := main + "\n" + m.statusBar()
+	if helpBox != "" {
+		out += "\n" + helpBox
+	}
+	return out
+}
+
+// renderSidebar renders the file list with a fixed height. The list scrolls
+// around the current file, so a PR with hundreds of files can never push the
+// diff pane off-screen; overflow is signalled with ↑/↓ counters.
+func (m *tuiModel) renderSidebar(width, height int) string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(trunc(fmt.Sprintf("%s#%d", m.pr.Repo, m.pr.Number), width)) + "\n")
+	b.WriteString(statusStyle.Render(trunc(m.pr.Title, width)) + "\n\n")
+
+	// Rows reserved below the list: blank, progress, status.
+	listH := height - 6
+	if listH < 0 {
+		listH = 0
+	}
+	var items []string
 	if m.plan != nil {
 		for i, st := range m.plan.Steps {
 			prefix := "  "
 			if i == m.current {
 				prefix = "> "
 			}
-			icon := statusIcon(st.Status)
-			line := fmt.Sprintf("%s%s %d %s", prefix, icon, st.Order, baseName(st.Path))
+			line := trunc(fmt.Sprintf("%s%s %d %s", prefix, statusIcon(st.Status), st.Order, baseName(st.Path)), width)
 			if i == m.current {
 				line = lipgloss.NewStyle().Bold(true).Render(line)
 			}
-			left.WriteString(line + "\n")
+			items = append(items, line)
 		}
 	}
-	left.WriteString("\n")
-	done, total := progressCounts(m.plan)
-	left.WriteString(statusStyle.Render(fmt.Sprintf("progress: %d/%d", done, total)) + "\n")
-	left.WriteString(statusStyle.Render(m.status) + "\n")
-
-	// right: diff viewport
-	right := m.viewport.View()
-
-	// layout
-	leftBox := lipgloss.NewStyle().Width(leftWidth).Height(m.height - 3).Render(left.String())
-	rightBox := lipgloss.NewStyle().Width(rightWidth).Height(m.height - 3).Render(right)
-	main := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, "  ", rightBox)
-
-	bar := statusStyle.Render("n/p file · j/k scroll · m done · s skip · / ask · r replan · ? help · q quit")
-	out := main + "\n" + bar
-	if m.help {
-		out += "\n" + boxStyle.Render(helpText())
+	for _, line := range windowLines(items, m.current, listH) {
+		b.WriteString(line + "\n")
 	}
-	return out
+	b.WriteString("\n")
+	done, total := progressCounts(m.plan)
+	b.WriteString(statusStyle.Render(fmt.Sprintf("progress: %d/%d", done, total)) + "\n")
+	b.WriteString(statusStyle.Render(trunc(m.status, width)))
+	return b.String()
+}
+
+// truncBlock truncates every line to width columns, for terminals narrower
+// than the help box.
+func truncBlock(s string, width int) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		lines[i] = trunc(ln, width)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// statusBar renders the footer. It is truncated to the terminal width so a
+// narrow window never wraps the footer into an extra row (which would scroll
+// the view and clip the panes).
+func (m *tuiModel) statusBar() string {
+	plain := "n/p file · j/k scroll"
+	if m.viewport.TotalLineCount() > m.viewport.Height {
+		plain += fmt.Sprintf(" · %d%%", int(m.viewport.ScrollPercent()*100))
+	}
+	plain += " · m done · s skip · / ask · r replan · ? help · q quit"
+	if m.width > 0 && lipgloss.Width(plain) > m.width {
+		plain = trunc(plain, m.width)
+	}
+	return statusStyle.Render(plain)
+}
+
+// windowLines returns at most height lines centred on current, with one-line
+// "+N more" markers at whichever ends are cut off. When the list fits it is
+// returned untouched.
+func windowLines(lines []string, current, height int) []string {
+	n := len(lines)
+	if height <= 0 || n == 0 {
+		return nil
+	}
+	if n <= height {
+		return lines
+	}
+	if height == 1 {
+		return []string{lines[clampInt(current, 0, n-1)]}
+	}
+	// Two markers are ideal, but when the window sits at an edge only one is
+	// needed — reclaim the spare row for another file.
+	topReserve := 2
+	if height < 3 {
+		topReserve = height - 1
+	}
+	for reserve := topReserve; reserve >= 1; reserve-- {
+		inner := height - reserve
+		if inner < 1 {
+			inner = 1
+		}
+		start := clampInt(current-inner/2, 0, n-inner)
+		end := start + inner
+		top, bottom := start > 0, end < n
+		need := 0
+		if top {
+			need++
+		}
+		if bottom {
+			need++
+		}
+		if need != reserve {
+			continue
+		}
+		out := make([]string, 0, height)
+		if top {
+			out = append(out, statusStyle.Render(fmt.Sprintf("  ↑ %d more", start)))
+		}
+		out = append(out, lines[start:end]...)
+		if bottom {
+			out = append(out, statusStyle.Render(fmt.Sprintf("  ↓ %d more", n-end)))
+		}
+		return out
+	}
+	return lines[n-height:]
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func (m *tuiModel) viewQuery() string {
@@ -151,14 +282,37 @@ func (m *tuiModel) viewQuery() string {
 
 // paneWidths returns the sidebar and diff-pane widths for the current
 // terminal size; both the layout and the viewport wrapping use the same math.
+// The two panes plus their separator must always fit inside the terminal, or
+// the renderer wraps a line and scrolls the whole view (which is how the diff
+// pane used to disappear on narrow windows).
 func (m *tuiModel) paneWidths() (int, int) {
+	width := m.width
+	if width <= 0 {
+		width = 100
+	}
 	leftWidth := 34
-	if m.width < 90 {
+	switch {
+	case width < 70:
+		leftWidth = width / 3
+	case width < 90:
 		leftWidth = 30
 	}
-	rightWidth := m.width - leftWidth - 4
-	if rightWidth < 40 {
-		rightWidth = 40
+	if leftWidth < 16 {
+		leftWidth = 16
+	}
+	rightWidth := width - leftWidth - 5 // 3 for the gutter, 2 for the right margin
+	if rightWidth < 20 {
+		rightWidth = 20
+		if rightWidth > width-leftWidth-2 {
+			leftWidth = width - rightWidth - 2
+			if leftWidth < 8 {
+				leftWidth = 8
+				rightWidth = width - leftWidth - 2
+			}
+		}
+	}
+	if rightWidth < 8 {
+		rightWidth = 8
 	}
 	return leftWidth, rightWidth
 }
@@ -185,11 +339,31 @@ func baseName(p string) string {
 	return p[i+1:]
 }
 
+// trunc shortens s to at most n display columns, appending an ellipsis. It
+// counts rendered width (not bytes) so wide runes and ANSI-free unicode names
+// cannot overflow the pane.
 func trunc(s string, n int) string {
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	limit := n - 1
+	if limit < 1 {
+		limit = 1
+	}
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + "…"
 }
 
 func helpText() string {

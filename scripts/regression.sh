@@ -6,8 +6,11 @@
 #   3. AI dump (default model): every file gets an AI-authored 4-bullet rationale
 #   4. TUI: model ready, ask rename, summaries for every file, no loading stalls
 #   5. SIGINT: graceful shutdown, no llama-server residue, memory watermark
-#   6. summaries persist once and are never recalculated (--no-ai run reuses them)
-#   7. ask subcommand + clean shutdown (no stray processes, ports free)
+#   5b. persisted summaries reused with --no-ai (never recalculated)
+#   6. ask subcommand
+#   7. large PR fixture: 1,200-line single-file rewrite + 121 files renders,
+#      keeps the diff pane on screen and scrolls to the last diff line
+#   8. clean shutdown (no stray processes, ports free)
 #
 # Usage: scripts/regression.sh [repo-path]
 #
@@ -178,7 +181,24 @@ ASK_RC=$?
 check "ask exits 0" "0" "$ASK_RC"
 [ "$(grep -c 'Relevant files' /tmp/regr-ask.txt)" -ge 1 ] && ok "ask returns relevant files" || bad "ask returned no results"
 
-echo "== 7. clean shutdown =="
+echo "== 7. large PR fixture (1k+ LOC in one file, 121 files) =="
+FIXTURE="$ROOT_DIR/testdata/large-pr-repo"
+"$ROOT_DIR/scripts/make-large-pr-fixture.sh" "$FIXTURE" > /tmp/regr-fixture.txt 2>&1
+LARGE_FILES="$("$BIN" --repo "$FIXTURE" --base base --head large-pr --no-ai --dump 2>/dev/null | sed -n 's/.*files=\([0-9]*\).*/\1/p' | head -1)"
+check "large PR file count" "121" "$LARGE_FILES"
+LARGE_PLAN="$("$BIN" --repo "$FIXTURE" --base base --head large-pr --no-ai --dump 2>/dev/null | grep -c -- 'rationale: - Intent:' || true)"
+check "large PR plan covers every file" "121" "$LARGE_PLAN"
+# The real regression: the pane must stay on screen with 121 files, and the
+# tail of the 2,400-line single-file diff must be reachable.
+if (cd "$ROOT_DIR" && go test ./internal/tui -count=1 \
+  -run 'TestLargePR|TestLargeDiff|TestCapDiff|TestWindowLines|TestWrapCodeLine|TestFooterFits|TestMarkDoneKeepsScroll' > /tmp/regr-large.txt 2>&1); then
+  ok "large PR render + full scroll"
+else
+  cat /tmp/regr-large.txt
+  bad "large PR render + full scroll"
+fi
+
+echo "== 8. clean shutdown =="
 sleep 1
 LEFT="$(pgrep -f 'llama-server' | wc -l | tr -d ' ')"
 check "no llama-server residue" "0" "$LEFT"

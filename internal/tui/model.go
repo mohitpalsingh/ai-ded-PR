@@ -63,6 +63,9 @@ type tuiModel struct {
 	listOff  int
 	depStack []int
 	summary  map[string]string
+	// shownPath is the file currently rendered in the diff pane; it lets
+	// setDiffContent keep the scroll position when only the status changes.
+	shownPath string
 
 	loadingMsg string
 	status     string
@@ -224,7 +227,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = v.Height
 		_, rw := m.paneWidths()
 		m.viewport.Width = rw
-		m.viewport.Height = max(10, v.Height-12)
+		// viewReview refines this when the help box is open; the diff pane
+		// otherwise fills the terminal minus the status bar.
+		m.viewport.Height = max(8, v.Height-1)
 		// re-wrap the pane for the new width
 		if m.screen == screenReview {
 			m.setDiffContent()
@@ -734,6 +739,7 @@ func (m *tuiModel) stepPath(i int) string {
 func (m *tuiModel) setDiffContent() {
 	if m.pr == nil || m.plan == nil || m.current >= len(m.plan.Steps) {
 		m.viewport.SetContent("")
+		m.shownPath = ""
 		return
 	}
 	path := m.plan.Steps[m.current].Path
@@ -772,7 +778,7 @@ func (m *tuiModel) setDiffContent() {
 		}
 		fmt.Fprintf(&b, "Deps: %s  (1-%d jump · b return)\n", strings.Join(parts, "  "), len(parts))
 	}
-	// Wrap every line to the pane width before it reaches the viewport; the
+	// Wrap prose to the pane width before it reaches the viewport; the
 	// viewport clips long lines rather than wrapping them, which used to chop
 	// rationale bullets, dependency links and long diff lines mid-way.
 	// Wrapping plain text first keeps it ANSI-safe: coloring is applied only
@@ -781,12 +787,21 @@ func (m *tuiModel) setDiffContent() {
 	content := wrapText(b.String(), w)
 	content += "\n--- diff ---\n"
 	if cf != nil {
-		content += colorizeDiff(wrapText(capDiff(cf.Patch), w))
+		// Diff lines are hard-wrapped exactly at the pane width: no word
+		// reflow, so indentation and spacing in code survive the render.
+		content += colorizeDiff(capDiff(cf.Patch), w)
 	} else {
 		content += "(no diff)"
 	}
 	m.viewport.SetContent(content)
-	m.viewport.GotoTop()
+	// Clamp the offset after the content (or the window) changed size.
+	m.viewport.SetYOffset(m.viewport.YOffset)
+	// Switching files starts at the top; marking done/skipping or resizing
+	// keeps the reader where they were in a long diff.
+	if path != m.shownPath {
+		m.shownPath = path
+		m.viewport.GotoTop()
+	}
 }
 
 // wrapText wraps each line of plain text to at most limit columns at word
@@ -891,9 +906,30 @@ func splitAtWidth(s string, limit int) (string, string) {
 	return s[:cut], s[cut:]
 }
 
-// maxDiffLines bounds how much of a very large patch we render, keeping the
-// viewport fast and memory flat on huge PRs.
-const maxDiffLines = 1500
+// maxDiffLines bounds how much of a pathological patch we render, keeping the
+// viewport fast and memory flat on absurd files. It must stay well above real
+// review sizes: a 1,200-line rewrite is already ~2,400 diff lines, and the old
+// 1,500-line cap silently cut the tail of exactly those files (the "large PR
+// isn't scrollable" bug).
+const maxDiffLines = 20000
+
+// capDiff truncates a patch only past the safety bound, and says so visibly.
+func capDiff(patch string) string {
+	total := strings.Count(patch, "\n")
+	if total <= maxDiffLines {
+		return patch
+	}
+	idx := 0
+	for i := 0; i < maxDiffLines; i++ {
+		j := strings.IndexByte(patch[idx:], '\n')
+		if j < 0 {
+			idx = len(patch)
+			break
+		}
+		idx += j + 1
+	}
+	return patch[:idx] + fmt.Sprintf("\n... (%d more lines not shown — file too large to render)\n", total-maxDiffLines)
+}
 
 // jumpToDep moves to the n-th changed dependency of the current file
 // (0-based). The previous position is remembered so `b` can return after
@@ -942,23 +978,6 @@ func (m *tuiModel) jumpBack() {
 	}
 	m.status = "← back to " + m.plan.Steps[m.current].Path
 	m.setDiffContent()
-}
-
-func capDiff(patch string) string {
-	total := strings.Count(patch, "\n")
-	if total <= maxDiffLines {
-		return patch
-	}
-	idx := 0
-	for i := 0; i < maxDiffLines; i++ {
-		j := strings.IndexByte(patch[idx:], '\n')
-		if j < 0 {
-			idx = len(patch)
-			break
-		}
-		idx += j + 1
-	}
-	return patch[:idx] + fmt.Sprintf("\n... (%d more lines not shown)\n", total-maxDiffLines)
 }
 
 func safeAdd(cf *models.ChangedFile) int {
@@ -1013,7 +1032,53 @@ func statusIcon(s models.ReviewStatus) string {
 	}
 }
 
-func colorizeDiff(patch string) string {
+// wrapCodeLine hard-wraps one diff line at the pane width without reflowing
+// it: every character is preserved in order, so code indentation, runs of
+// spaces and punctuation survive the render. Tabs are expanded first because
+// a terminal would otherwise blow past the measured width.
+func wrapCodeLine(line string, limit int) []string {
+	line = expandTabs(line, 4)
+	if limit < 8 || lipgloss.Width(line) <= limit {
+		return []string{line}
+	}
+	out := make([]string, 0, lipgloss.Width(line)/limit+1)
+	for lipgloss.Width(line) > limit {
+		head, tail := splitAtWidth(line, limit)
+		if head == "" {
+			break
+		}
+		out = append(out, head)
+		line = tail
+	}
+	return append(out, line)
+}
+
+// expandTabs turns tabs into spaces using a fixed tab stop, so display width
+// matches what the viewport measures.
+func expandTabs(s string, tab int) string {
+	if tab <= 0 || !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			n := tab - col%tab
+			b.WriteString(strings.Repeat(" ", n))
+			col += n
+			continue
+		}
+		b.WriteRune(r)
+		col += lipgloss.Width(string(r))
+	}
+	return b.String()
+}
+
+// colorizeDiff wraps and colors each diff line. Wrapping happens per line
+// before styling so every continuation row keeps the line's color and no
+// content is lost to the viewport's horizontal clip.
+func colorizeDiff(patch string, width int) string {
 	lines := strings.Split(patch, "\n")
 	var b strings.Builder
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
@@ -1021,17 +1086,27 @@ func colorizeDiff(patch string) string {
 	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 	gray := lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	for _, l := range lines {
+		var style *lipgloss.Style
 		switch {
 		case strings.HasPrefix(l, "@@"):
-			b.WriteString(cyan.Render(l))
+			style = &cyan
 		case strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++"):
-			b.WriteString(green.Render(l))
+			style = &green
 		case strings.HasPrefix(l, "-") && !strings.HasPrefix(l, "---"):
-			b.WriteString(red.Render(l))
+			style = &red
 		case strings.HasPrefix(l, "diff "), strings.HasPrefix(l, "index "), strings.HasPrefix(l, "---"), strings.HasPrefix(l, "+++"):
-			b.WriteString(gray.Render(l))
-		default:
-			b.WriteString(l)
+			style = &gray
+		}
+		chunks := wrapCodeLine(l, width)
+		for i, chunk := range chunks {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			if style != nil {
+				b.WriteString(style.Render(chunk))
+			} else {
+				b.WriteString(chunk)
+			}
 		}
 		b.WriteString("\n")
 	}

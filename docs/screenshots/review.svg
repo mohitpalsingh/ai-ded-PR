@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="885" height="650" viewBox="0 0 885 650" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+<defs><clipPath id="win"><rect x="0.5" y="0.5" width="884" height="649" rx="10"/></clipPath></defs>
+<g clip-path="url(#win)">
+<rect x="0" y="0" width="885" height="650" fill="#1e1e2e"/>
+<rect x="0" y="0" width="885" height="34" fill="#181825"/>
+<line x1="0" y1="34" x2="885" y2="34" stroke="#313244"/>
+<circle cx="20" cy="17.0" r="5" fill="#f38ba8"/>
+<circle cx="38" cy="17.0" r="5" fill="#f9e2af"/>
+<circle cx="56" cy="17.0" r="5" fill="#a6e3a1"/>
+<text x="442.5" y="21.0" fill="#7f849c" font-size="12" text-anchor="middle" xml:space="preserve">ai-ded-pr · intent / dependencies / verify / risk per file</text>
+</g>
+<rect x="0.5" y="0.5" width="884" height="649" rx="10" fill="none" stroke="#313244"/>
+<g xml:space="preserve">
+<text x="20" y="67" fill="#cdd6f4" xml:space="preserve"><tspan fill="#ff5faf" font-weight="bold">tokenrepo#0</tspan><tspan>                       </tspan><tspan fill="#444444"> │ </tspan><tspan>•  internal/auth/token.go  (+13/-2)</tspan></text>
+<text x="20" y="85" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">Local diff base..refresh-toke</tspan><tspan>     </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="103" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>Rationale:</tspan></text>
+<text x="20" y="121" fill="#cdd6f4" xml:space="preserve"><tspan font-weight="bold">&gt; • 1 token.go</tspan><tspan>                    </tspan><tspan fill="#444444"> │ </tspan><tspan>- Intent: The code now explicitly handles empty tokens and refresh skew</tspan></text>
+<text x="20" y="139" fill="#cdd6f4" xml:space="preserve"><tspan>  • 2 token_test.go               </tspan><tspan fill="#444444"> │ </tspan><tspan>  window scenarios, improving token validity checks. The Refresh</tspan></text>
+<text x="20" y="157" fill="#cdd6f4" xml:space="preserve"><tspan>  • 3 config.go                   </tspan><tspan fill="#444444"> │ </tspan><tspan>  function is now called when the token is expired</tspan></text>
+<text x="20" y="175" fill="#cdd6f4" xml:space="preserve"><tspan>  • 4 client.go                   </tspan><tspan fill="#444444"> │ </tspan><tspan>- Dependencies: time, errors</tspan></text>
+<text x="20" y="193" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>- Verify: Examine the now() call and the</tspan></text>
+<text x="20" y="211" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">progress: 0/4</tspan><tspan>                     </tspan><tspan fill="#444444"> │ </tspan><tspan>  s.now().Add(refreshSkew).Before(t.ExpiresAt) comparison to ensure the</tspan></text>
+<text x="20" y="229" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">model ready</tspan><tspan>                       </tspan><tspan fill="#444444"> │ </tspan><tspan>  correct expiry window is being used</tspan></text>
+<text x="20" y="247" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>- Risk: Medium - Incorrect handling of the refresh skew window could</tspan></text>
+<text x="20" y="265" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>  lead to expired tokens being used, causing security vulnerabilities</tspan></text>
+<text x="20" y="283" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="301" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>Focus: token expiry logic; refresh skew window</tspan></text>
+<text x="20" y="319" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="337" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>--- diff ---</tspan></text>
+<text x="20" y="355" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">diff --git a/internal/auth/token.go b/internal/auth/token.go</tspan></text>
+<text x="20" y="373" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">index 42646fb..c8b55d4 100644</tspan></text>
+<text x="20" y="391" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">--- a/internal/auth/token.go</tspan></text>
+<text x="20" y="409" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">+++ b/internal/auth/token.go</tspan></text>
+<text x="20" y="427" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00afff">@@ -5,6 +5,12 @@ import (</tspan></text>
+<text x="20" y="445" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>    "time"</tspan></text>
+<text x="20" y="463" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan> )</tspan></text>
+<text x="20" y="481" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="499" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00d787">+var (</tspan></text>
+<text x="20" y="517" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00d787">+   ErrExpired  = errors.New("token expired")</tspan></text>
+<text x="20" y="535" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00d787">+   ErrRefresh  = errors.New("token refresh failed")</tspan></text>
+<text x="20" y="553" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00d787">+   refreshSkew = 30 * time.Second</tspan></text>
+<text x="20" y="571" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00d787">+)</tspan></text>
+<text x="20" y="589" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00d787">+</tspan></text>
+<text x="20" y="607" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan> type Token struct {</tspan></text>
+<text x="20" y="625" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">n/p file · j/k scroll · 0% · m done · s skip · / ask · r replan · ? help · q quit</tspan></text>
+</g></svg>

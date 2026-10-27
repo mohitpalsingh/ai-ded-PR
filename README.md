@@ -1,87 +1,115 @@
 # 🧠 ai-ded-pr
 
-**Stop reading PRs file-by-file. A local Gemma model plans the review, and you walk it one file at a time.**
+**Review a PR like a teammate walked you through it.** One file at a time, in dependency
+order, with a short note on what changed and what to check — before you read a line.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go 1.27+](https://img.shields.io/badge/go-1.27%2B-00ADD8.svg)](https://go.dev)
 [![Platform: macOS Apple Silicon](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black.svg)](#-requirements)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#-extend)
 ![No telemetry](https://img.shields.io/badge/telemetry-none-success.svg)
 
-On-device. No accounts. Nothing ever leaves your machine.
+![ai-ded-pr reviewing a 4-file auth change](docs/screenshots/review.svg)
 
-```text
-  ai-ded-pr v1.1.3  guided code review with local Gemma
-  ┌─────────────────────────────┬──────────────────────────────────────────────┐
-  │ ✓ 1 TokenService.java       │ • TokenService.java  (+12/-3)                │
-  │ → 2 TokenServiceTest.java   │                                              │
-  │ • 3 OrderService.java       │ Rationale:                                   │
-  │ • 4 application.properties  │ - Intent: Adds OAuth refresh ...             │
-  │                             │ - Dependencies: TokenService.java, Redis     │
-  │ progress: 1/4               │ - Verify: expiry math, nil token handling    │
-  │ n/p · m done · / ask        │ - Risk: refresh loop on clock skew           │
-  │                             │ Deps: [1] TokenService.java  (1-1 jump · b)  │
-  └─────────────────────────────┴──────────────────────────────────────────────┘
-```
+Local Gemma 3 4B on llama.cpp. ~2 GB of RAM. No account, no API key, nothing leaves your
+machine.
 
-Startup shows a minimal loading screen while the model warms up — the review
-opens only when the plan (order + rationales) is ready, so files never
-reshuffle under you:
+## Why
 
-```text
-  ai-ded-pr v1.1.3  guided code review with local Gemma
+`git diff` hands you files in alphabetical order and a wall of context-free lines. That's
+not how a change works — and it's why a 1k-LOC PR takes an afternoon.
 
-  ⠋ planning review — ordering files & writing rationales
+- **An order that matches the change.** Shared types and config first, then the core logic,
+  each test right after the code it covers, then callers, docs and infra.
+- **Every file speaks.** Four bullets per file — **Intent / Dependencies / Verify / Risk**.
+  What it does, what else it touches, what to check, where it can bite. You get context
+  before line one. No more opening 14 files to figure out where to start.
+- **Jump to what matters.** Dependencies between changed files are read from the diff, not
+  guessed. `1`–`9` jumps to a changed dependency, `b` brings you back.
+- **One model call per PR.** The whole plan (order + rationales) comes from a single local
+  pass, then it's persisted. Swapping files is instant; nothing regenerates behind your back.
+- **Local and boring.** Gemma 3 4B Q4_K_M, ~2.5 GB download, ~2 GB resident, buttery smooth
+  on a 16 GB M-series Mac. `llama-server` starts with the TUI and dies with it.
 
-  7 files changed, +140/-30
-  model ready
+It won't magically make a 5,000-line PR small. It tells you where to start, what to check
+and what you can skip — which is most of the work.
 
-  The review opens when the plan (order + rationales) is ready.
-  q quit
-```
+## Big PRs
 
-## ⚡ Why
+1k LOC in one file is the case this was built for. It should be reviewable in one sitting.
 
-- **A plan, not a dump.** A single linear reading order: shared types/config first, then core logic, each test placed right after the code it covers, then callers, docs, infra. Every file gets a 4-bullet rationale — *Intent / Dependencies / Verify / Risk* — written from the actual changed lines, not from the filename.
-- **Jump to what matters.** Dependencies between changed files are detected from the diff itself (symbols, not guesses): press `1`–`9` to jump to a changed dependency, `b` to come back after verifying it.
-- **Opens when it's ready.** A minimal startup screen while Gemma warms up and the plan is built — then one stable review, no placeholder reshuffling.
-- **One model call per PR.** The whole plan (order + risks + per-file summaries) comes from a single local LLM pass, then it's *persisted*. Swapping files never regenerates anything.
-- **Local and boring.** Gemma 3 4B on llama.cpp (Metal). ~2.5 GB model, starts when the TUI opens, killed on exit. No daemon, no ports left behind.
+![ai-ded-pr reviewing a 1,200-line rewrite across 121 files](docs/screenshots/large-pr.svg)
+
+- **The file list scrolls, the diff doesn't disappear.** With 121 files the sidebar windows
+  around the current file (`↑/↓ N more`) instead of pushing the diff pane off-screen.
+- **The whole diff renders.** A 1,200-line rewrite is ~2,400 diff lines; `j`/`k` and
+  `pgup`/`pgdown` reach the last one, with the scroll position in the footer.
+- **Code stays code.** Diff lines are hard-wrapped at the pane width, never reflowed —
+  indentation, tabs and spacing survive. Prose (rationale, deps) still word-wraps.
+- **No silent cuts.** A single file past 20,000 diff lines is capped with a visible
+  `… N more lines not shown` marker. Below that, nothing is hidden.
+- **Your place stays put.** Marking a file done keeps your scroll position; switching
+  files starts at the top.
+
+There is a fixture for exactly this: `scripts/make-large-pr-fixture.sh` builds a repo
+with a 1,200-line single-file rewrite plus 120 other changed files. `make regression`
+runs the render/scroll checks against it.
+
+Startup is the next thing being cut down. The review opens only when the plan is ready —
+until then you get a spinner, not a half-ordered file list:
+
+![planning screen](docs/screenshots/planning.svg)
 
 ## 🔧 Requirements
 
-- macOS on Apple Silicon (M-series), 16 GB+ RAM
+- macOS on Apple Silicon, 16 GB+ RAM
 - [Homebrew](https://brew.sh) Go + llama.cpp: `brew install go llama.cpp`
 
-## 📦 Install (one command)
+## 📦 Install
 
 ```bash
-git clone https://github.com/mohit/ai-ded-pr.git
-cd ai-ded-pr
-./scripts/install.sh        # builds, links into ~/.local/bin, downloads the model
+git clone https://github.com/mohitpalsingh/ai-ded-PR.git
+cd ai-ded-PR
+./scripts/install.sh      # builds, links into ~/.local/bin, downloads the model
 ```
 
-The model (~2.5 GB) is fetched once with resume support; if a download is
-interrupted, the next run continues where it stopped.
+The model (~2.5 GB) is fetched once with resume support. Interrupted? The next run
+continues where it stopped.
 
 ## 🚀 Use
 
 ```bash
-ai-ded-pr                         # review current repo changes
-ai-ded-pr diff                    # same, explicit
-ai-ded-pr branch-diff feat main   # branch vs base
-ai-ded-pr ask "where is auth handled?"   # find relevant files
+ai-ded-pr                                  # review current repo changes
+ai-ded-pr diff                             # same, explicit
+ai-ded-pr branch-diff feature/AUD-13533-CMS-table-migration master
+ai-ded-pr ask "where is auth handled?"     # find the files that matter
 ```
 
 GitHub PRs:
+
 ```bash
 ai-ded-pr --github https://github.com/owner/repo/pull/123
 ```
 
 ### Keys
-`n`/`p` next/prev file · `1`–`9` jump to a changed dependency · `b` back · `j`/`k` scroll · `m` done · `s` skip · `/` ask · `r` replan · `?` help · `q` quit
 
-Every file gets the same four-bullet summary — **Intent / Dependencies / Verify / Risk** — generated once by your model, persisted, never recalculated.
+| Key | What it does |
+|---|---|
+| `n` / `p` | next / previous file |
+| `j` / `k` | scroll the diff (one line) |
+| `pgup` / `pgdown` | scroll the diff (one page) |
+| `1`–`9` | jump to a changed dependency of this file |
+| `b` | return after a dependency jump |
+| `m` | mark current file done |
+| `s` | skip current file |
+| `u` | unmark |
+| `/` | ask the local model which files are relevant |
+| `r` | regenerate the plan |
+| `g` | new PR / source |
+| `?` | help |
+| `q` | quit |
+
+Every file gets the same four bullets — **Intent / Dependencies / Verify / Risk** —
+generated once, persisted, never recalculated.
 
 ## 🧩 How it works
 
@@ -98,35 +126,50 @@ Every file gets the same four-bullet summary — **Intent / Dependencies / Verif
   q / Ctrl+C ──► server killed, ports released, zero residue
 ```
 
+The plan is one model call. Everything after that — file switching, dependency jumps,
+done/skip, scrolling — is local and instant.
+
 ## 💾 Footprint
 
 | | |
 |---|---|
 | Model | Gemma 3 4B Q4_K_M (~2.5 GB, one-time download) |
-| Runtime RAM | ~3 GB while the TUI is open (quantized KV cache, 8k context) |
+| Runtime RAM | ~2 GB resident (llama-server), ~3 GB peak with the TUI open |
 | Processes | `llama-server` starts with the TUI, dies with it — verified by `make regression` |
 | Cache/state | `~/.cache/ai-pr-review/` (state per repo+commit, resumable model download) |
+| Telemetry | none |
 
-## 🧹 Uninstall (zero bloat)
+## 🧹 Uninstall
 
 ```bash
 ./scripts/uninstall.sh
 ```
 
-Removes the binary, models, cache, state, and logs. Leaves your Homebrew `go`/`llama.cpp` intact.
+Removes the binary, models, cache, state and logs. Leaves your Homebrew `go`/`llama.cpp` alone.
 
 ## 🛠 Extend
 
-Hosts are pluggable: implement `hosts.Host` in `internal/hosts/<name>` for GitLab, Bitbucket, or Azure DevOps. PRs welcome.
+Hosts are pluggable: implement `hosts.Host` in `internal/hosts/<name>` for GitLab,
+Bitbucket or Azure DevOps. PRs welcome.
 
 ## 🧪 Develop
 
 ```bash
 make build        # binary in build/
 make test         # go test + vet
-make regression   # full end-to-end suite against a real repo + real model
+make regression   # end-to-end: real repo, real model, large-PR fixture
 ```
+
+Large-PR fixture, for manual TUI testing:
+
+```bash
+scripts/make-large-pr-fixture.sh                     # 1,200-line file + 121 files
+ai-ded-pr --repo testdata/large-pr-repo --base base --head large-pr --no-ai
+```
+
+Screenshots are real captures of the TUI (`scripts/ansi2svg.py` turns a
+`tmux capture-pane -e` into the SVGs in `docs/screenshots/`).
 
 ## Status
 
-v1.1.3 — MIT License
+v1.1.4 — MIT License

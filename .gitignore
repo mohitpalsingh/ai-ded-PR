@@ -2,3 +2,4 @@ build/
 *.gguf
 *.part
 .DS_Store
+testdata/large-pr-repo/

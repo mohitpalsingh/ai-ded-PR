@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="885" height="650" viewBox="0 0 885 650" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+<defs><clipPath id="win"><rect x="0.5" y="0.5" width="884" height="649" rx="10"/></clipPath></defs>
+<g clip-path="url(#win)">
+<rect x="0" y="0" width="885" height="650" fill="#1e1e2e"/>
+<rect x="0" y="0" width="885" height="34" fill="#181825"/>
+<line x1="0" y1="34" x2="885" y2="34" stroke="#313244"/>
+<circle cx="20" cy="17.0" r="5" fill="#f38ba8"/>
+<circle cx="38" cy="17.0" r="5" fill="#f9e2af"/>
+<circle cx="56" cy="17.0" r="5" fill="#a6e3a1"/>
+<text x="442.5" y="21.0" fill="#7f849c" font-size="12" text-anchor="middle" xml:space="preserve">ai-ded-pr · 1,200-line rewrite + 121 files, still scrollable</text>
+</g>
+<rect x="0.5" y="0.5" width="884" height="649" rx="10" fill="none" stroke="#313244"/>
+<g xml:space="preserve">
+<text x="20" y="67" fill="#cdd6f4" xml:space="preserve"><tspan fill="#ff5faf" font-weight="bold">large-pr-repo#0</tspan><tspan>                   </tspan><tspan fill="#444444"> │ </tspan><tspan>•  internal/service/pipeline.go  (+1200/-1200)</tspan></text>
+<text x="20" y="85" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">Local diff base..large-pr</tspan><tspan>         </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="103" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan>Rationale:</tspan></text>
+<text x="20" y="121" fill="#cdd6f4" xml:space="preserve"><tspan font-weight="bold">&gt; • 1 pipeline.go</tspan><tspan>                 </tspan><tspan fill="#444444"> │ </tspan><tspan>- Intent: modifies internal/service/pipeline.go (modified, +1200/-1200)</tspan></text>
+<text x="20" y="139" fill="#cdd6f4" xml:space="preserve"><tspan>  • 2 util0.go                    </tspan><tspan fill="#444444"> │ </tspan><tspan>  Go</tspan></text>
+<text x="20" y="157" fill="#cdd6f4" xml:space="preserve"><tspan>  • 3 util1.go                    </tspan><tspan fill="#444444"> │ </tspan><tspan>- Dependencies: check callers, tests and configuration that reference</tspan></text>
+<text x="20" y="175" fill="#cdd6f4" xml:space="preserve"><tspan>  • 4 util10.go                   </tspan><tspan fill="#444444"> │ </tspan><tspan>  this file</tspan></text>
+<text x="20" y="193" fill="#cdd6f4" xml:space="preserve"><tspan>  • 5 util100.go                  </tspan><tspan fill="#444444"> │ </tspan><tspan>- Verify: walk each hunk for correctness, edge cases and consistency</tspan></text>
+<text x="20" y="211" fill="#cdd6f4" xml:space="preserve"><tspan>  • 6 util101.go                  </tspan><tspan fill="#444444"> │ </tspan><tspan>  with surrounding code</tspan></text>
+<text x="20" y="229" fill="#cdd6f4" xml:space="preserve"><tspan>  • 7 util102.go                  </tspan><tspan fill="#444444"> │ </tspan><tspan>- Risk: high churn; review in chunks and watch for regressions</tspan></text>
+<text x="20" y="247" fill="#cdd6f4" xml:space="preserve"><tspan>  • 8 util103.go                  </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="265" fill="#cdd6f4" xml:space="preserve"><tspan>  • 9 util104.go                  </tspan><tspan fill="#444444"> │ </tspan><tspan>Focus: large change; review in chunks</tspan></text>
+<text x="20" y="283" fill="#cdd6f4" xml:space="preserve"><tspan>  • 10 util105.go                 </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="301" fill="#cdd6f4" xml:space="preserve"><tspan>  • 11 util106.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan>--- diff ---</tspan></text>
+<text x="20" y="319" fill="#cdd6f4" xml:space="preserve"><tspan>  • 12 util107.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">diff --git a/internal/service/pipeline.go b/internal/service/</tspan></text>
+<text x="20" y="337" fill="#cdd6f4" xml:space="preserve"><tspan>  • 13 util108.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">pipeline.go</tspan></text>
+<text x="20" y="355" fill="#cdd6f4" xml:space="preserve"><tspan>  • 14 util109.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">index 01e4de5..2749eee 100644</tspan></text>
+<text x="20" y="373" fill="#cdd6f4" xml:space="preserve"><tspan>  • 15 util11.go                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">--- a/internal/service/pipeline.go</tspan></text>
+<text x="20" y="391" fill="#cdd6f4" xml:space="preserve"><tspan>  • 16 util110.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#626262">+++ b/internal/service/pipeline.go</tspan></text>
+<text x="20" y="409" fill="#cdd6f4" xml:space="preserve"><tspan>  • 17 util111.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#00afff">@@ -1,1202 +1,1202 @@</tspan></text>
+<text x="20" y="427" fill="#cdd6f4" xml:space="preserve"><tspan>  • 18 util112.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan> package service</tspan></text>
+<text x="20" y="445" fill="#cdd6f4" xml:space="preserve"><tspan>  • 19 util113.go                 </tspan><tspan fill="#444444"> │ </tspan></text>
+<text x="20" y="463" fill="#cdd6f4" xml:space="preserve"><tspan>  • 20 util114.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler0(x int) int { return x + 0 }</tspan></text>
+<text x="20" y="481" fill="#cdd6f4" xml:space="preserve"><tspan>  • 21 util115.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler1(x int) int { return x + 1 }</tspan></text>
+<text x="20" y="499" fill="#cdd6f4" xml:space="preserve"><tspan>  • 22 util116.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler2(x int) int { return x + 2 }</tspan></text>
+<text x="20" y="517" fill="#cdd6f4" xml:space="preserve"><tspan>  • 23 util117.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler3(x int) int { return x + 3 }</tspan></text>
+<text x="20" y="535" fill="#cdd6f4" xml:space="preserve"><tspan>  • 24 util118.go                 </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler4(x int) int { return x + 4 }</tspan></text>
+<text x="20" y="553" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">  ↓ 97 more</tspan><tspan>                       </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler5(x int) int { return x + 5 }</tspan></text>
+<text x="20" y="571" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler6(x int) int { return x + 6 }</tspan></text>
+<text x="20" y="589" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">progress: 0/121</tspan><tspan>                   </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler7(x int) int { return x + 7 }</tspan></text>
+<text x="20" y="607" fill="#cdd6f4" xml:space="preserve"><tspan>                                  </tspan><tspan fill="#444444"> │ </tspan><tspan fill="#ff0000">-func handler8(x int) int { return x + 8 }</tspan></text>
+<text x="20" y="625" fill="#cdd6f4" xml:space="preserve"><tspan fill="#626262">n/p file · j/k scroll · 0% · m done · s skip · / ask · r replan · ? help · q quit</tspan></text>
+</g></svg>
