@@ -8,7 +8,7 @@ order, with a short note on what changed and what to check — before you read a
 [![Platform: macOS Apple Silicon](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black.svg)](#-requirements)
 ![No telemetry](https://img.shields.io/badge/telemetry-none-success.svg)
 
-![ai-ded-pr reviewing a 4-file auth change](docs/screenshots/review.png)
+![ai-ded-pr reviewing a 4-file auth change](https://cdn.jsdelivr.net/gh/mohitpalsingh/ai-ded-PR@v1.1.5/docs/screenshots/review.png)
 
 Local Gemma 3 4B on llama.cpp. ~2 GB of RAM. No account, no API key, nothing leaves your
 machine.
@@ -37,7 +37,7 @@ and what you can skip — which is most of the work.
 
 1k LOC in one file is the case this was built for. It should be reviewable in one sitting.
 
-![ai-ded-pr reviewing a 1,200-line rewrite across 121 files](docs/screenshots/large-pr.png)
+![ai-ded-pr reviewing a 1,200-line rewrite across 121 files](https://cdn.jsdelivr.net/gh/mohitpalsingh/ai-ded-PR@v1.1.5/docs/screenshots/large-pr.png)
 
 - **The file list scrolls, the diff doesn't disappear.** With 121 files the sidebar windows
   around the current file (`↑/↓ N more`) instead of pushing the diff pane off-screen.
@@ -166,10 +166,11 @@ ai-ded-pr --repo testdata/large-pr-repo --base base --head large-pr --no-ai
 ```
 
 Screenshots are real captures of the TUI: `scripts/ansi2svg.py` turns a
-`tmux capture-pane -e` capture into SVG, then it is rasterized to PNG at 2x for
-GitHub's markdown renderer (it rejects SVG images). Captures are taken from
-`testdata/large-pr-repo` and a small auth-change fixture.
+`tmux capture-pane -e` capture into SVG, then it is rasterized to PNG at 2x.
+The local copies live in `docs/screenshots/`; the README points at the jsDelivr
+mirror pinned to the v1.1.5 tag, because GitHub serves repo-local images from
+`raw.githubusercontent.com`, which some corporate networks sinkhole.
 
 ## Status
 
-v1.1.5 — MIT License
+v1.1.6 — MIT License
